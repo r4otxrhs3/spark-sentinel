@@ -24,6 +24,7 @@ import duckdb
 
 from spark_sentinel.findings import Finding, Location, Severity
 from spark_sentinel.plan import PlanNode, final_nodes
+from spark_sentinel.profiles import profile_overrides
 from spark_sentinel.rules import Rule, load_builtin_rules
 from spark_sentinel.store import Warehouse, run_query
 
@@ -276,10 +277,14 @@ def analyze(
     select: Iterable[str] | None = None,
     ignore: Iterable[str] | None = None,
     overrides: dict[str, dict[str, Any]] | None = None,
+    profile: str = "default",
 ) -> AnalysisResult:
-    """Run rules over apps. One rule crashing is recorded in result.errors, not raised."""
+    """Run rules over apps. One rule crashing is recorded in result.errors, not raised.
+
+    Thresholds: each rule's defaults, then the profile's overrides, then `overrides`.
+    """
     if rules is None:
-        rules = resolve_rules(select, ignore, overrides)
+        rules = resolve_rules(select, ignore, profile_overrides(profile, overrides))
     app_ids = list(app_ids) if app_ids is not None else warehouse.app_ids()
     result = AnalysisResult(apps=app_ids, rules=[r.id for r in rules])
 

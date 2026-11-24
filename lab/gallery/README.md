@@ -17,7 +17,7 @@ python lab/gallery/summarize.py           # prints each log's symptom numbers
 
 ## Jobs and what they should trigger
 
-This table is the spec for Step 9's tests: every ✅ must fire, and every blank cell must not.
+This table is the spec for the tests: `tests/test_matrix.py` parses it, so every ✅ must fire and every blank cell must not, on logs from Spark 4.3 and 3.5 (`tests/fixtures/eventlogs/gallery*`), with both the `laptop` and `default` threshold profiles. Change the table and the tests change with it.
 
 | Job | SKEW001 | SPILL001 | FILES001 | PLAN001 | PLAN002 | PART001 | How the problem is caused |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|---|
