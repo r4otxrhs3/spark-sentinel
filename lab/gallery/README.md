@@ -39,7 +39,7 @@ Timings vary by machine; byte counts and task counts should be close to these.
 | `clean` | 6 tasks · no spill · `PushedFilters=[IsNotNull(country), EqualTo(country,IN)]` |
 | `skew` | join stage: slowest task 2.8 s vs median 0.4 s (**~7×**); shuffle read 70 MB vs median 2.3 MB (**~31×**) → **data** skew |
 | `spill` | **~250 MB** spilled to disk, ~300 MB from memory |
-| `udf_filter` | `PushedFilters=[]` (nothing pushed) · `BatchEvalPython` in the plan |
+| `udf_filter` | no `PushedFilters` line in the scan (nothing pushed) · `BatchEvalPython` in the plan |
 | `small_files` | **500** write tasks, median **7 KB** written per task |
 | `over_partitioned` | **1,000** post-shuffle tasks, median **5 KB** read per task (target ~128 MB) |
 
@@ -51,4 +51,6 @@ Timings vary by machine; byte counts and task counts should be close to these.
 4. **The partitions rule needs a minimum task count.** `skew` has 16 tasks of about 2 MB each, far below 128 MB, but 16 tasks isn't a problem. Only flag "too many partitions" above a task-count floor (e.g. > 200).
 5. **AQE hides problems on small data.** With coalescing on, it merged `skew`'s 16 join partitions into 3, and the hot task's 31× shuffle read looked like only 2.7×. That's why `skew` and `over_partitioned` turn coalescing off. On real clusters, check `spark.sql.adaptive.*` in the config table before blaming the code.
 6. **`coalesce(n)` reaches upstream.** A `coalesce(1)` before a write collapses the whole previous stage into one task, unlike `repartition(1)`, which adds a shuffle.
-7. **Rolled logs contain non-log files.** An `eventlog_v2_*` folder also holds `appstatus_*` and hidden `.crc` files. The reader must read only `events_<N>_*` parts, in order of N.
+7. **"Nothing pushed down" is a missing line, not an empty list.** In the formatted physical plan,
+   a scan with no pushed filters simply has no `PushedFilters:` line. Test for its absence.
+8. **Rolled logs contain non-log files.** An `eventlog_v2_*` folder also holds `appstatus_*` and hidden `.crc` files. The reader must read only `events_<N>_*` parts, in order of N.

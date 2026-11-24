@@ -2,12 +2,13 @@
 
 This does the same thing as clean.py's filter (country == "IN"), but through a Python UDF.
 Spark can't look inside the UDF, so:
-- the Parquet scan shows `PushedFilters: []` instead of `[IsNotNull(country), EqualTo(country,IN)]`
+- the Parquet scan has no `PushedFilters:` line at all, where clean.py's scan shows
+  `PushedFilters: [IsNotNull(country), EqualTo(country,IN)]`
 - every row is read, shipped to a Python worker, and only then filtered
 - the plan gains a BatchEvalPython (or ArrowEvalPython) node
 
 Expected signal: plan text contains a *EvalPython node feeding a Filter, and the scan
-has no pushed filters.
+has no PushedFilters line.
 """
 
 from _spark import DATA, OUT, start
