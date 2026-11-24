@@ -22,7 +22,7 @@ times). Layout of a warehouse folder (default: .sentinel/):
 - Re-ingesting an unchanged log is skipped; --force replaces it. Never duplicates rows.
 
 DuckDB 2.0 note: on one connection, `execute(...).fetchone()` followed by `con.sql(...)` fails
-("unfinished result"). All queries here go through `_run()`, which always uses
+("unfinished result"). All queries here go through `run_query()`, which always uses
 execute(...).fetchall(), and that is safe in every combination.
 """
 
@@ -306,12 +306,15 @@ class Warehouse:
         """Run SQL against the table views; return (column names, rows)."""
         con = self.connect(app_id)
         try:
-            return _run(con, sql, params)
+            return run_query(con, sql, params)
         finally:
             con.close()
 
 
-def _run(con: duckdb.DuckDBPyConnection, sql: str, params: list[Any] | None = None):
+def run_query(
+    con: duckdb.DuckDBPyConnection, sql: str, params: list[Any] | None = None
+) -> tuple[list[str], list[tuple]]:
+    """Run SQL; return (column names, rows). Always execute().fetchall(): see module notes."""
     cursor = con.execute(sql, params or [])
     columns = [d[0] for d in cursor.description] if cursor.description else []
     return columns, cursor.fetchall()

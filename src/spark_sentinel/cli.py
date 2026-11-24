@@ -15,6 +15,7 @@ import typer
 from spark_sentinel import __version__
 from spark_sentinel.parser import SCHEMA, parse
 from spark_sentinel.reader import EventLogError, open_log
+from spark_sentinel.rules import load_builtin_rules
 from spark_sentinel.store import DEFAULT_WAREHOUSE, StoreError, Warehouse, ingest
 
 app = typer.Typer(
@@ -248,3 +249,19 @@ def _print_table(columns: list[str], rows: list[tuple], max_width: int = 48) -> 
     for r in cells:
         typer.echo("  ".join(v.ljust(w) for v, w in zip(r, widths, strict=True)).rstrip())
     typer.echo(f"({len(rows)} row{'s' if len(rows) != 1 else ''})")
+
+
+@app.command("rules")
+def rules_command() -> None:
+    """List the available rules and their thresholds."""
+    rules = load_builtin_rules()
+    if not rules:
+        typer.echo("No rules installed yet.")
+        return
+    for rule_id, cls in rules.items():
+        typer.echo(f"{rule_id}  {cls.name}  [{cls.category}]")
+        if cls.description:
+            typer.echo(f"    {cls.description}")
+        for key, value in cls.thresholds.items():
+            typer.echo(f"    {key} = {value}")
+        typer.echo("")
