@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
+import sys
 from collections import Counter
 from importlib import metadata
 from pathlib import Path
@@ -13,8 +15,12 @@ import orjson
 import typer
 
 from spark_sentinel import __version__
+from spark_sentinel.analysis import analyze
+from spark_sentinel.config import ConfigError, load_settings
 from spark_sentinel.parser import SCHEMA, parse
+from spark_sentinel.profiles import profile_overrides
 from spark_sentinel.reader import EventLogError, open_log
+from spark_sentinel.report import build_report, render
 from spark_sentinel.rules import load_builtin_rules
 from spark_sentinel.store import DEFAULT_WAREHOUSE, StoreError, Warehouse, ingest
 
@@ -265,3 +271,117 @@ def rules_command() -> None:
         for key, value in cls.thresholds.items():
             typer.echo(f"    {key} = {value}")
         typer.echo("")
+
+
+@app.command("analyze")
+def analyze_command(
+    paths: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            help="Event logs or folders to ingest and analyze. Leave out to analyze apps "
+            "already in the warehouse."
+        ),
+    ] = None,
+    warehouse: WarehouseOption = DEFAULT_WAREHOUSE,
+    app_ids: Annotated[
+        list[str] | None, typer.Option("--app", help="Only this app ID (repeatable).")
+    ] = None,
+    profile: Annotated[
+        str | None, typer.Option(help="Threshold profile: default (clusters) or laptop.")
+    ] = None,
+    select: Annotated[
+        list[str] | None,
+        typer.Option(help="Only these rules or prefixes, e.g. SKEW,PLAN001 (repeatable)."),
+    ] = None,
+    ignore: Annotated[
+        list[str] | None, typer.Option(help="Skip these rules or prefixes (repeatable).")
+    ] = None,
+    threshold: Annotated[
+        list[str] | None,
+        typer.Option(help="Override one threshold: RULE.name=value (repeatable)."),
+    ] = None,
+    fail_on: Annotated[
+        str | None,
+        typer.Option(
+            help="Exit with code 1 if a finding is at least this severe: "
+            "high, medium, low, info or never."
+        ),
+    ] = None,
+    fmt: Annotated[
+        str | None, typer.Option("--format", "-f", help="text, md, html or json.")
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Write the report to this file.")
+    ] = None,
+    config: Annotated[
+        Path | None, typer.Option(help="Settings file (default: ./sentinel.toml if present).")
+    ] = None,
+    color: Annotated[
+        bool | None, typer.Option("--color/--no-color", help="Colour the text report.")
+    ] = None,
+) -> None:
+    """Find performance problems and report them.
+
+    Exit codes: 0 OK, 1 a finding at or above --fail-on, 2 bad options, 3 unreadable input or
+    a rule crashed.
+    """
+    try:
+        settings = load_settings(
+            config,
+            profile=profile,
+            fail_on=fail_on,
+            fmt=fmt,
+            select=select,
+            ignore=ignore,
+            thresholds=threshold,
+        )
+    except ConfigError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    wh = Warehouse(warehouse)
+    targets = list(app_ids or [])
+    try:
+        for path in paths or []:
+            results = ingest(path, warehouse)
+            targets += [r.app_id for r in results]
+            new = sum(r.status == "ingested" for r in results)
+            typer.echo(f"Read {len(results)} log(s) from {path} ({new} new).", err=True)
+        if not targets and not wh.app_ids():
+            raise StoreError(
+                f"No apps in {wh.root}. Pass event logs to analyze, or run: "
+                "sentinel ingest <event log>"
+            )
+        overrides = profile_overrides(settings.profile, settings.thresholds)
+        result = analyze(
+            wh,
+            app_ids=list(dict.fromkeys(targets)) or None,
+            select=settings.select,
+            ignore=settings.ignore,
+            overrides=overrides,
+        )
+    except (EventLogError, StoreError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
+    except ValueError as exc:  # unknown rule or threshold
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    report = build_report(wh, result, profile=settings.profile, overrides=overrides)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render(report, settings.format), encoding="utf-8")
+        typer.echo(f"{report.summary_line()}. Report: {output}")
+    else:
+        use_color = (
+            color if color is not None else (sys.stdout.isatty() and not os.environ.get("NO_COLOR"))
+        )
+        width = min(shutil.get_terminal_size((100, 20)).columns, 100)
+        text = render(report, settings.format, color=bool(use_color), width=width)
+        typer.echo(text, nl=False, color=bool(use_color) or None)
+
+    for error in result.errors:
+        typer.echo(
+            f"error: rule {error.rule_id} crashed on {error.app_id}: {error.message}", err=True
+        )
+    raise typer.Exit(code=result.exit_code(settings.fail_on))

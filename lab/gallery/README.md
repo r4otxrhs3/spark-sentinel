@@ -6,7 +6,7 @@ Small PySpark jobs that each cause one known performance problem on purpose, plu
 
 ```bash
 pip install -e ".[lab]"                   # pyspark; Java 17/21 must be installed
-python lab/gallery/run_all.py             # makes lab/data on first run, then runs all 7 jobs (~3 min)
+python lab/gallery/run_all.py             # makes lab/data on first run, then runs all 11 jobs (~5 min)
 python lab/gallery/summarize.py           # prints each log's symptom numbers
 ```
 
@@ -19,17 +19,21 @@ python lab/gallery/summarize.py           # prints each log's symptom numbers
 
 This table is the spec for the tests: `tests/test_matrix.py` parses it, so every ✅ must fire and every blank cell must not, on logs from Spark 4.3 and 3.5 (`tests/fixtures/eventlogs/gallery*`), with both the `laptop` and `default` threshold profiles. Change the table and the tests change with it.
 
-| Job | SKEW001 | SPILL001 | FILES001 | PLAN001 | PLAN002 | PART001 | How the problem is caused |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|---|
-| `clean` | | | | | | | Built-in filter (pushed down), even keys, AQE on |
-| `skew` | ✅* | | | | | | 70% of rows share one join key; broadcast join, AQE skew-join and coalescing disabled |
-| `spill` | | ✅ | | | | | Sorts 6M wide rows in 4 partitions with 1 GB of memory |
-| `udf_filter` | | | | ✅ | | | Same filter as `clean`, but written as a Python UDF, so it can't be pushed down |
-| `small_files` | | | ✅ | | | ✅ | Reads 1,000 tiny files; `repartition(500)` before the write makes 500 tiny output files |
-| `over_partitioned` | | | | | | ✅ | 1,000 shuffle partitions for ~5 MB of shuffle data; AQE coalescing disabled |
-| `cross_join` | | | | | ✅ | | Join on `a < b - 80` (no equality), broadcast disabled → `CartesianProduct` |
+| Job | SKEW001 | SPILL001 | FILES001 | PLAN001 | PLAN002 | PART001 | GC001 | PAR001 | PLAN003 | PLAN004 | PLAN005 | CONF001 | How the problem is caused |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|---|
+| `clean` | | | | | | | | | | | | | Built-in filter (pushed down), even keys, AQE on |
+| `skew` | ✅* | | | | | | | | | ✅ | | ✅ | 70% of rows share one join key; broadcast join, AQE skew-join and coalescing disabled |
+| `spill` | | ✅ | | | | | | | | | | ✅ | Sorts 6M wide rows in 4 partitions with 1 GB of memory |
+| `udf_filter` | | | | ✅ | | | | | | | | | Same filter as `clean`, but written as a Python UDF, so it can't be pushed down |
+| `small_files` | | | ✅ | | | ✅ | | | | | | | Reads 1,000 tiny files; `repartition(500)` before the write makes 500 tiny output files |
+| `over_partitioned` | | | | | | ✅ | | | | | | ✅ | 1,000 shuffle partitions for ~5 MB of shuffle data; AQE coalescing disabled |
+| `cross_join` | | | | | ✅ | | | | | | | ✅ | Join on `a < b - 80` (no equality), broadcast disabled → `CartesianProduct` |
+| `window_no_partition` | | | | | | | | | ✅* | | | | Running total over `Window.orderBy("ts")` with no `partitionBy` → one task |
+| `few_tasks` | | | | | | | | ✅* | | | | | CPU-heavy hashing on 2 partitions while 4 cores are available |
+| `python_udf` | | | | | | | | | | | ✅ | | A pickled Python UDF (`useArrow=False`) computes a column for 2M rows |
+| `gc_pressure` | | | | | | | ✅*x2 | | | | | ✅ | `-Xmn2m` pins the young generation to 2 MB while `collect_list` allocates heavily |
 
-\* SKEW001 needs a laptop threshold (`min_time_lost_ms=1000`): its production default is 30 s lost, and the hot task here costs ~2 s. Every other cell fires with the default thresholds. PART002 (too few partitions) has no gallery job; synthetic tests cover it.
+\* Needs the `laptop` profile: these rules' production defaults are in minutes and GBs (e.g. SKEW001 wants 30 s lost; the hot task here costs ~2 s). Every other ✅ fires with the default thresholds too. x2 means the rule fires on two stages. PART002 (too few partitions) has no gallery job; synthetic tests cover it. CONF001 is informational: it lists settings that switch off Spark's automatic optimizations, which these gallery jobs do on purpose.
 
 `small_files` also triggers the partitions rule, and that's correct: `repartition(500)` on a few MB *is* over-partitioning, and it's the cause of the small output files. Real jobs often have several linked problems.
 
@@ -40,20 +44,24 @@ Timings vary by machine; byte counts and task counts should be close to these.
 | Job | Signal |
 |---|---|
 | `clean` | 6 tasks · no spill · `PushedFilters=[IsNotNull(country), EqualTo(country,IN)]` |
-| `skew` | join stage: slowest task 2.8 s vs median 0.4 s (**~7×**); shuffle read 70 MB vs median 2.3 MB (**~31×**) → **data** skew |
+| `skew` | join stage: slowest task 2.8 s vs median 0.4 s (**~7x**); shuffle read 70 MB vs median 2.3 MB (**~31x**) → **data** skew |
 | `spill` | **~250 MB** spilled to disk, ~300 MB from memory |
 | `udf_filter` | no `PushedFilters` line in the scan (nothing pushed) · `BatchEvalPython` in the plan |
 | `small_files` | **500** write tasks, median **7 KB** written per task |
 | `over_partitioned` | **1,000** post-shuffle tasks, median **5 KB** read per task (target ~128 MB) |
 | `cross_join` | `CartesianProduct` in the final plan, condition `(a_val < (b_val - 80))` |
+| `window_no_partition` | `Exchange SinglePartition` → `Window`; 1 task reads **35 MB** for 3.5 s |
+| `few_tasks` | stage of **9 s** on **2 tasks** with 4 cores |
+| `python_udf` | `BatchEvalPython` computing `size_band` for 2M rows |
+| `gc_pressure` | **27%** and **37%** of task time in GC (other gallery jobs: ≤ 11%) |
 
 ## Lessons for tuning the rules (Step 8)
 
 1. **The plan's skew threshold (> 30 s) never fires on laptop data.** Make every threshold configurable, and use lower ones (e.g. 1 s) in tests.
-2. **A ratio alone gives false alarms.** `over_partitioned` shows a 5× max/median ratio, but the slowest task took only 131 ms vs 26 ms, which is noise. Require the ratio **and** a minimum time lost (max − median).
-3. **Check bytes too, to name the cause.** In `skew` the slow task also read 31× the median bytes, so it's data skew. A slow task with normal bytes would be compute skew (a heavy UDF or GC pressure).
+2. **A ratio alone gives false alarms.** `over_partitioned` shows a 5x max/median ratio, but the slowest task took only 131 ms vs 26 ms, which is noise. Require the ratio **and** a minimum time lost (max − median).
+3. **Check bytes too, to name the cause.** In `skew` the slow task also read 31x the median bytes, so it's data skew. A slow task with normal bytes would be compute skew (a heavy UDF or GC pressure).
 4. **The partitions rule needs a minimum task count.** `skew` has 16 tasks of about 2 MB each, far below 128 MB, but 16 tasks isn't a problem. Only flag "too many partitions" above a task-count floor (e.g. > 200).
-5. **AQE hides problems on small data.** With coalescing on, it merged `skew`'s 16 join partitions into 3, and the hot task's 31× shuffle read looked like only 2.7×. That's why `skew` and `over_partitioned` turn coalescing off. On real clusters, check `spark.sql.adaptive.*` in the config table before blaming the code.
+5. **AQE hides problems on small data.** With coalescing on, it merged `skew`'s 16 join partitions into 3, and the hot task's 31x shuffle read looked like only 2.7x. That's why `skew` and `over_partitioned` turn coalescing off. On real clusters, check `spark.sql.adaptive.*` in the config table before blaming the code.
 6. **`coalesce(n)` reaches upstream.** A `coalesce(1)` before a write collapses the whole previous stage into one task, unlike `repartition(1)`, which adds a shuffle.
 7. **"Nothing pushed down" is a missing line, not an empty list.** In the formatted physical plan,
    a scan with no pushed filters simply has no `PushedFilters:` line. Test for its absence.
@@ -66,4 +74,12 @@ Timings vary by machine; byte counts and task counts should be close to these.
     input from a 45 MB dataset. Use `input_records` for evidence; they are exact.
 11. **A plan with AQE lists every node twice** (final and initial plan, different ids). Rules
     read only the final plan's nodes, or they report each problem twice.
-12. **Rolled logs contain non-log files.** An `eventlog_v2_*` folder also holds `appstatus_*` and hidden `.crc` files. The reader must read only `events_<N>_*` parts, in order of N.
+12. **Spark rewrites your query before it runs.** `row_number() ... <= 1000` over an unpartitioned
+    window does NOT funnel everything through one task on Spark 3.5+: a "window group limit" keeps
+    only the top rows per partition first. A running total can't be limited, so the gallery uses one.
+13. **Arrow Python UDFs are on by default from Spark 4.2, but fall back silently** to pickled UDFs
+    when pandas or PyArrow is missing, which `pip install pyspark` doesn't install. A
+    `BatchEvalPython` node on 4.2+ means "opted out or fell back".
+14. **Spark's per-task executor GC counters aren't usable.** Every task reports the same JVM-wide
+    totals, and some stages report zeros. GC001 uses each task's `JVM GC Time` instead.
+15. **Rolled logs contain non-log files.** An `eventlog_v2_*` folder also holds `appstatus_*` and hidden `.crc` files. The reader must read only `events_<N>_*` parts, in order of N.

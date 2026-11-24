@@ -45,8 +45,12 @@ class AppBuilder:
         master: str = "local[4]",
         conf: dict[str, str] | None = None,
         plan: str | None = None,
+        description: str = "synthetic query",
+        spark_version: str = "4.0.0",
     ) -> None:
+        self.spark_version = spark_version
         self.app_id, self.cores, self.master = app_id, cores, master
+        self.description = description
         self.conf = conf or {}
         self.plan = plan
         self.tasks: list[dict] = []
@@ -61,7 +65,7 @@ class AppBuilder:
         stages = sorted({t["stage"] for t in self.tasks}) or [0]
         props = {"spark.master": self.master, **self.conf}
         events: list[dict] = [
-            {"Event": "SparkListenerLogStart", "Spark Version": "4.0.0"},
+            {"Event": "SparkListenerLogStart", "Spark Version": self.spark_version},
             {"Event": "SparkListenerEnvironmentUpdate", "Spark Properties": props},
             {
                 "Event": "SparkListenerApplicationStart",
@@ -81,7 +85,7 @@ class AppBuilder:
                 {
                     "Event": SQL_UI + "SparkListenerSQLExecutionStart",
                     "executionId": 0,
-                    "description": "synthetic query",
+                    "description": self.description,
                     "time": base,
                     "physicalPlanDescription": self.plan,
                 }
@@ -130,16 +134,18 @@ class AppBuilder:
                 }
             )
         for stage in stages:
-            n = sum(1 for t in self.tasks if t["stage"] == stage)
+            stage_tasks = [t for t in self.tasks if t["stage"] == stage]
+            first = min((t["launch_ms"] for t in stage_tasks), default=0)
+            last = max((t["launch_ms"] + t["duration_ms"] for t in stage_tasks), default=1)
             events.append(
                 {
                     "Event": "SparkListenerStageCompleted",
                     "Stage Info": {
                         "Stage ID": stage,
                         "Stage Attempt ID": 0,
-                        "Number of Tasks": n,
-                        "Submission Time": base,
-                        "Completion Time": base + 1,
+                        "Number of Tasks": len(stage_tasks),
+                        "Submission Time": base + first,
+                        "Completion Time": base + last,
                     },
                 }
             )

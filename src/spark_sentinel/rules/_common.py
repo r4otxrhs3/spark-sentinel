@@ -44,3 +44,32 @@ def explicit_repartition(nodes: list[PlanNode]) -> int | None:
 
 def size(n: float) -> str:
     return format_bytes(n)
+
+
+def spark_version(ctx) -> tuple[int, int]:
+    """(major, minor) of the app's Spark version, (0, 0) if unknown."""
+    match = re.match(r"(\d+)\.(\d+)", str(ctx.app.get("spark_version") or ""))
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
+def single_partition_exchange(nodes: list[PlanNode]) -> PlanNode | None:
+    """The Exchange that moves all rows into one partition, if the plan has one."""
+    for node in nodes:
+        if node.name == "Exchange" and node.get("Arguments", "").startswith("SinglePartition"):
+            return node
+    return None
+
+
+def query_input_records(ctx, execution_id: int) -> int:
+    """Rows the query's tasks read from files/sources (exact, unlike input bytes)."""
+    value = ctx.scalar(
+        """
+        SELECT sum(t.input_records)
+        FROM tasks t
+        JOIN job_stages js ON js.stage_id = t.stage_id
+        JOIN jobs j        ON j.job_id = js.job_id
+        WHERE j.sql_execution_id = ?
+        """,
+        [execution_id],
+    )
+    return int(value or 0)

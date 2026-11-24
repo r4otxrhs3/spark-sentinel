@@ -103,3 +103,86 @@ def final_nodes(plan: str | None) -> list[PlanNode]:
         return []
     nodes = parse_nodes(plan)
     return [nodes[i] for i in sorted(final_node_ids(plan)) if i in nodes]
+
+
+# --- the tree (structure and AQE runtime statistics)
+
+_TREE_LINE = re.compile(
+    r"^(?P<lead>[\s:|+\-]*?)(?:\* )?(?P<name>[A-Za-z][^()]*?) \((?P<id>\d+)\)(?P<rest>.*)$"
+)
+_STATS = re.compile(
+    r"Statistics\(sizeInBytes=(?P<size>[\d.]+) (?P<unit>[KMGTPE]?i?B)"
+    r"(?:, rowCount=(?P<rows>[\d.E+]+))?"
+)
+_UNITS = {"B": 0, "KiB": 1, "MiB": 2, "GiB": 3, "TiB": 4, "PiB": 5, "EiB": 6}
+
+
+@dataclass(frozen=True)
+class TreeNode:
+    id: int
+    name: str  # as written in the tree, e.g. "SortMergeJoin Inner", "ShuffleQueryStage"
+    column: int  # indentation: children are deeper
+    parent: int | None
+    size_bytes: int | None = None  # AQE runtime statistics, on query stages
+    row_count: int | None = None
+
+
+def final_tree(plan: str | None) -> dict[int, TreeNode]:
+    """The final plan's tree: each node's parent, and AQE runtime sizes where Spark shows them.
+
+    Query stages that finished carry runtime statistics, e.g.
+    `ShuffleQueryStage (10), Statistics(sizeInBytes=39.1 KiB, rowCount=1.00E+3)`.
+    """
+    if not plan:
+        return {}
+    tree_text = plan.split("\n\n", 1)[0]
+    has_sections = "== Final Plan ==" in tree_text or "== Current Plan ==" in tree_text
+    section = None
+    nodes: dict[int, TreeNode] = {}
+    stack: list[TreeNode] = []  # path from the root to the previous line
+    for line in tree_text.splitlines():
+        if "== Final Plan ==" in line or "== Current Plan ==" in line:
+            section, stack = "final", []
+            continue
+        if "== Initial Plan ==" in line:
+            section = "initial"
+            continue
+        if has_sections and section != "final":
+            continue
+        match = _TREE_LINE.match(line)
+        if not match:
+            continue
+        column = len(match.group("lead"))
+        while stack and stack[-1].column >= column:
+            stack.pop()
+        size = rows = None
+        stats = _STATS.search(match.group("rest"))
+        if stats:
+            size = int(float(stats.group("size")) * 1024 ** _UNITS.get(stats.group("unit"), 0))
+            rows = int(float(stats.group("rows"))) if stats.group("rows") else None
+        node = TreeNode(
+            id=int(match.group("id")),
+            name=match.group("name").strip(),
+            column=column,
+            parent=stack[-1].id if stack else None,
+            size_bytes=size,
+            row_count=rows,
+        )
+        nodes[node.id] = node
+        stack.append(node)
+    return nodes
+
+
+def children(tree: dict[int, TreeNode], node_id: int) -> list[TreeNode]:
+    return [n for n in tree.values() if n.parent == node_id]
+
+
+def first_with_stats(tree: dict[int, TreeNode], node_id: int) -> TreeNode | None:
+    """The nearest node at or below node_id that carries runtime statistics."""
+    queue = [tree[node_id]]
+    while queue:
+        node = queue.pop(0)
+        if node.size_bytes is not None:
+            return node
+        queue.extend(children(tree, node.id))
+    return None

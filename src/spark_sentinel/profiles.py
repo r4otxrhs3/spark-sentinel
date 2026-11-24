@@ -20,6 +20,12 @@ PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         # A laptop straggler costs seconds, not the 30 s production default. Gallery skew loses
         # ~2 s; nothing else in the gallery is flagged even at 0 ms (see tests/test_matrix.py).
         "SKEW001": {"min_time_lost_ms": 1_000},
+        # Laptop stages last seconds, not minutes. Margins measured on the gallery (both Spark
+        # versions): GC001 first false-alarms near an 8% GC share, PAR001 at 1 s stages, and
+        # PLAN003 only at 0 bytes (tiny final aggregates).
+        "GC001": {"min_gc_ms": 2_000},
+        "PAR001": {"min_stage_ms": 3_000},
+        "PLAN003": {"min_bytes": 16 * 1024 * 1024},
     },
 }
 

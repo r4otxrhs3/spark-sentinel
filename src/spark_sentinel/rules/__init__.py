@@ -10,6 +10,7 @@ Create a module in this package (e.g. rules/skew.py) with one class per rule:
         category = "skew"
         description = "One task in a stage takes far longer than its siblings."
         thresholds = {"min_ratio": 5.0, "min_time_lost_ms": 30_000}
+        docs = (docs_links.AQE_SKEW_JOIN,)
 
         def evaluate(self, ctx: AnalysisContext) -> Iterator[Finding]:
             for row in ctx.rows("SELECT ... FROM tasks ... HAVING ...", [self.t("min_ratio")]):
@@ -24,6 +25,8 @@ Conventions
 - id: CATEGORY + 3 digits, unique (SKEW001, SPILL001, PLAN001, ...).
 - Thresholds: every number a rule compares against goes in `thresholds`, so users and tests
   can change it (laptop logs need far lower thresholds than production).
+- Docs: cite the Spark / PySpark doc sections the advice follows (spark_sentinel/docs_links.py).
+  The engine attaches them to every finding, and reports link to them.
 - Ratios in SQL: guard with NULLIF(x, 0). In DuckDB x / 0 is inf, not NULL.
 - A rule must not raise for odd data; return no findings instead. (If it does raise, the
   engine records the error and carries on with the other rules.)
@@ -40,7 +43,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from spark_sentinel.analysis import AnalysisContext
-    from spark_sentinel.findings import Finding
+    from spark_sentinel.findings import Finding, Reference
 
 RULE_ID_RE = re.compile(r"^[A-Z]{2,12}\d{3}$")
 
@@ -59,6 +62,7 @@ class Rule(ABC):
     category: ClassVar[str] = "performance"
     description: ClassVar[str] = ""
     thresholds: ClassVar[dict[str, Any]] = {}
+    docs: ClassVar[tuple[Reference, ...]] = ()  # official docs the advice follows
 
     def __init_subclass__(cls, register: bool = True, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

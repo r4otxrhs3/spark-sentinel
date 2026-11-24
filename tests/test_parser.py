@@ -21,7 +21,19 @@ from spark_sentinel.parser import SCHEMA, EventParser, ParsedApp, parse
 from spark_sentinel.reader import open_log
 
 GALLERY = Path(__file__).parent / "fixtures" / "eventlogs" / "gallery"
-JOBS = ["clean", "skew", "spill", "udf_filter", "small_files", "over_partitioned", "cross_join"]
+JOBS = [
+    "clean",
+    "skew",
+    "spill",
+    "udf_filter",
+    "small_files",
+    "over_partitioned",
+    "cross_join",
+    "window_no_partition",
+    "few_tasks",
+    "python_udf",
+    "gc_pressure",
+]
 MB = 1024 * 1024
 
 
@@ -42,6 +54,10 @@ EXPECTED_COUNTS = {
     "small_files": (533, 3, 3, 4, 1, 1),
     "over_partitioned": (1006, 4, 4, 7, 1, 1),
     "cross_join": (17, 2, 2, 3, 1, 1),
+    "window_no_partition": (6, 3, 3, 4, 1, 1),
+    "few_tasks": (4, 3, 3, 6, 1, 1),
+    "python_udf": (6, 3, 3, 4, 1, 1),
+    "gc_pressure": (8, 2, 2, 3, 1, 1),
 }
 
 

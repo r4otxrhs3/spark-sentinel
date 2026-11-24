@@ -13,6 +13,7 @@ jobs and SQL query that ran it.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import traceback
 from collections.abc import Iterable
@@ -235,9 +236,12 @@ class AnalysisResult:
         return sum(1 for f in self.findings if f.severity == severity)
 
     def exit_code(self, fail_on: Severity | None = None) -> int:
-        """0 = OK; 1 = a finding at or above `fail_on`; 2 = a rule crashed."""
+        """0 = OK; 1 = a finding at or above `fail_on`; 3 = a rule crashed.
+
+        (2 is left for command-line usage errors, which is what Typer/Click use.)
+        """
         if self.errors:
-            return 2
+            return 3
         worst = self.max_severity
         if fail_on is not None and worst is not None and worst >= fail_on:
             return 1
@@ -302,7 +306,12 @@ def analyze(
                         )
                     )
                     continue
-                result.findings.extend(found)
+                result.findings.extend(
+                    f
+                    if f.references or not rule.docs
+                    else dataclasses.replace(f, references=rule.docs)
+                    for f in found
+                )
         finally:
             con.close()
 

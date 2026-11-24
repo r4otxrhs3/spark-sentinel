@@ -56,6 +56,12 @@ def test_all_rules_are_registered():
         "PLAN002",
         "PART001",
         "PART002",
+        "GC001",
+        "PAR001",
+        "PLAN003",
+        "PLAN004",
+        "PLAN005",
+        "CONF001",
     }
 
 

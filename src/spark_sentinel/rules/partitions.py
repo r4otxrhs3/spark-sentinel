@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from spark_sentinel import docs_links
 from spark_sentinel.analysis import AnalysisContext
 from spark_sentinel.findings import Evidence, Finding, Severity, Unit
 from spark_sentinel.rules import Rule
@@ -37,6 +38,7 @@ class TooManyPartitions(Rule):
         "medium_tasks": 1000,  # MEDIUM from this many tasks ...
         "medium_bytes_per_task": MB,  # ... or when the median task reads less than this
     }
+    docs = (docs_links.AQE_COALESCE, docs_links.TUNING_PARTITIONS)
 
     def evaluate(self, ctx: AnalysisContext) -> Iterator[Finding]:
         rows = ctx.rows(
@@ -119,6 +121,7 @@ class TooFewPartitions(Rule):
         "max_bytes_per_task": GB,  # median shuffle read per task above this = too big
         "target_bytes_per_task": 128 * MB,
     }
+    docs = (docs_links.TUNING_PARTITIONS, docs_links.PARALLELISM)
 
     def evaluate(self, ctx: AnalysisContext) -> Iterator[Finding]:
         rows = ctx.rows(

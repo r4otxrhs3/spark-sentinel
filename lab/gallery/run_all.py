@@ -26,6 +26,10 @@ JOBS = [
     "small_files",
     "over_partitioned",
     "cross_join",
+    "window_no_partition",
+    "few_tasks",
+    "python_udf",
+    "gc_pressure",
 ]
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from spark_sentinel import docs_links
 from spark_sentinel.analysis import AnalysisContext
 from spark_sentinel.findings import Evidence, Finding, Severity, Unit
 from spark_sentinel.rules import Rule
@@ -24,6 +25,7 @@ class Spill(Rule):
         "high_disk_spill_bytes": 10 * GB,  # HIGH from here
         "concentrated_fraction": 0.25,  # spill in <= this share of tasks -> probably skew
     }
+    docs = (docs_links.REDUCE_TASK_MEMORY, docs_links.MEMORY_OVERVIEW)
 
     def evaluate(self, ctx: AnalysisContext) -> Iterator[Finding]:
         rows = ctx.rows(

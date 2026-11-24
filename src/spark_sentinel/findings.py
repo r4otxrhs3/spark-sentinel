@@ -100,6 +100,17 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class Reference:
+    """A documentation section a finding's advice is based on."""
+
+    title: str  # e.g. "Optimizing Skew Join"
+    url: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"title": self.title, "url": self.url}
+
+
+@dataclass(frozen=True)
 class Location:
     """Where a problem is: the app, and as precisely as known, the stage, job and SQL query.
 
@@ -177,6 +188,7 @@ class Finding:
     impact_ms: int | None = None  # estimated wall-clock time lost, used to rank findings
     category: str = "performance"  # skew, spill, io, plan, partitions, cost, ...
     details: dict[str, Any] = field(default_factory=dict)  # extra machine-readable data
+    references: tuple[Reference, ...] = ()  # docs behind the advice; filled from Rule.docs
 
     def __post_init__(self) -> None:
         if not self.rule_id or not self.title:
@@ -217,6 +229,7 @@ class Finding:
             "impact_ms": self.impact_ms,
             "category": self.category,
             "details": self.details,
+            "references": [r.to_dict() for r in self.references],
             "fingerprint": self.fingerprint(),
         }
 
@@ -233,6 +246,7 @@ class Finding:
             impact_ms=data.get("impact_ms"),
             category=data.get("category", "performance"),
             details=data.get("details", {}),
+            references=tuple(Reference(**r) for r in data.get("references", [])),
         )
 
 

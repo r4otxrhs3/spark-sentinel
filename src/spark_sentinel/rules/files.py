@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from spark_sentinel import docs_links
 from spark_sentinel.analysis import AnalysisContext
 from spark_sentinel.findings import Evidence, Finding, Severity, Unit
 from spark_sentinel.rules import Rule
@@ -27,6 +28,7 @@ class SmallOutputFiles(Rule):
         "medium_median_file_bytes": MB,  # ... or when the median file is smaller than this
         "high_files": 10_000,  # HIGH from this many files
     }
+    docs = (docs_links.COALESCE_HINTS,)
 
     def evaluate(self, ctx: AnalysisContext) -> Iterator[Finding]:
         rows = ctx.rows(

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections import Counter
 from functools import cache
 from pathlib import Path
 
@@ -44,15 +45,22 @@ STRESSED = {
     "FILES001": {"min_files": 2, "max_median_file_bytes": 64 * MB},
     "PART001": {"min_tasks": 20, "min_bytes_per_task": 32 * MB},
     "PART002": {"max_bytes_per_task": 256 * MB},
+    "GC001": {"min_gc_fraction": 0.12, "min_gc_ms": 0},
+    "PAR001": {"min_stage_ms": 1_500},
+    "PLAN003": {"min_bytes": MB},
+    "PLAN004": {"max_broadcast_bytes": GB},
 }
 
 
 # --- the expected table, read from the README
 
 
+_CELL = re.compile(r"^✅(?P<laptop>\*)?(?:x(?P<count>\d+))?$")
+
+
 @cache
-def expected_table() -> dict[str, dict[str, str]]:
-    """job -> {rule_id: "always" | "laptop"} from the README's ✅ / ✅* cells."""
+def expected_table() -> dict[str, dict[str, tuple[str, int]]]:
+    """job -> {rule_id: ("always" | "laptop", count)} from the README's ✅, ✅*, ✅x2 cells."""
     lines = README.read_text(encoding="utf-8").splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith("| Job |"))
     header = [c.strip() for c in lines[start].strip("|").split("|")]
@@ -62,17 +70,29 @@ def expected_table() -> dict[str, dict[str, str]]:
             break
         cells = [c.strip() for c in line.strip("|").split("|")]
         job = cells[0].strip("`")
-        table[job] = {
-            rule: ("laptop" if cell.endswith("*") else "always")
-            for rule, cell in zip(header, cells, strict=False)
-            if RULE_ID_RE.match(rule) and cell.startswith("✅")
-        }
+        table[job] = {}
+        for rule, cell in zip(header, cells, strict=False):
+            if RULE_ID_RE.match(rule) and cell:
+                match = _CELL.match(cell)
+                assert match, (
+                    f"README cell for {job}/{rule} must be ✅, ✅*, ✅xN or ✅*xN: {cell!r}"
+                )
+                when = "laptop" if match.group("laptop") else "always"
+                table[job][rule] = (when, int(match.group("count") or 1))
     return table
 
 
+def expected_counts(job: str, profile: str) -> dict[str, int]:
+    """rule -> how many findings the job should produce with this profile."""
+    return {
+        rule: count
+        for rule, (when, count) in expected_table()[job].items()
+        if when == "always" or profile == "laptop"
+    }
+
+
 def expected(job: str, profile: str) -> set[str]:
-    cells = expected_table()[job]
-    return {rule for rule, when in cells.items() if when == "always" or profile == "laptop"}
+    return set(expected_counts(job, profile))
 
 
 # --- running the gallery
@@ -136,13 +156,14 @@ def test_every_job_triggers_exactly_its_rules(version, profile):
     found = found_by_job(version, result)
     problems = []
     for job in expected_table():
-        want, got = expected(job, profile), set(found[job])
-        if missing := want - got:
+        want, got = expected_counts(job, profile), Counter(found[job])
+        if missing := set(want) - set(got):
             problems.append(f"{job}: MISSED {sorted(missing)}")
-        if extra := got - want:
+        if extra := set(got) - set(want):
             problems.append(f"{job}: FALSE ALARM {sorted(extra)}")
-        if len(found[job]) != len(got):
-            problems.append(f"{job}: same rule reported twice {found[job]}")
+        for rule in set(want) & set(got):
+            if want[rule] != got[rule]:
+                problems.append(f"{job}: {rule} reported {got[rule]}x, expected {want[rule]}x")
     assert problems == [], f"Spark {version}, profile {profile}"
 
 
@@ -192,9 +213,10 @@ def all_findings() -> list[tuple[str, Finding]]:
 )
 def test_every_finding_meets_the_quality_contract(version, finding):
     f = finding
+    app_level = f.location.stage_id is None and f.location.sql_execution_id is None
     assert RULE_ID_RE.match(f.rule_id)
-    assert f.severity >= Severity.LOW
-    assert re.match(r"^(Stage|Query) \d+: ", f.title), f.title
+    assert f.severity >= Severity.LOW or (app_level and f.severity is Severity.INFO)
+    assert re.match(r"^(Stage \d+|Query \d+|App): ", f.title), f.title
     assert len(f.title) <= 100, f.title
     assert f.cause and f.cause[-1] in ".)", f.cause
     assert f.fix, "every finding needs at least one fix"
@@ -203,7 +225,9 @@ def test_every_finding_meets_the_quality_contract(version, finding):
     for e in f.evidence:
         text = str(e)
         assert not re.search(r"\b(None|nan|inf|n/a)\b", text), text
-    assert f.location.sql_execution_id is not None, "gallery problems all belong to a query"
+    if not app_level:
+        assert f.location.sql_execution_id is not None, "gallery problems all belong to a query"
+    assert f.references, "every finding links to the docs its advice follows"
     assert f.impact_ms is None or f.impact_ms >= 0
     assert Finding.from_dict(json.loads(json.dumps(f.to_dict()))) == f
 

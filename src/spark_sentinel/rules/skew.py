@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from spark_sentinel import docs_links
 from spark_sentinel.analysis import AnalysisContext
 from spark_sentinel.findings import Evidence, Finding, Severity, Unit
 from spark_sentinel.rules import Rule
@@ -28,6 +29,7 @@ class TaskSkew(Rule):
         "high_time_lost_ms": 600_000,  # ... or from this much time lost
         "gc_fraction": 0.3,  # GC >= this share of run time -> GC pressure
     }
+    docs = (docs_links.AQE_SKEW_JOIN, docs_links.BROADCAST_JOINS)
 
     def evaluate(self, ctx: AnalysisContext) -> Iterator[Finding]:
         rows = ctx.rows(

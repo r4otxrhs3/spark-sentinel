@@ -123,9 +123,13 @@ def test_example_rules_find_exactly_the_right_apps(warehouse):
 
     names = dict(warehouse.query("SELECT app_id, app_name FROM app")[1])
     hits = sorted((f.rule_id, names[f.location.app_id]) for f in result.findings)
-    assert hits == [("SKEW900", "gallery-skew"), ("SPILL900", "gallery-spill")]
+    assert hits == [
+        ("SKEW900", "gallery-skew"),
+        ("SPILL900", "gallery-gc_pressure"),  # spills 39 MB: above this example's 1 MB threshold
+        ("SPILL900", "gallery-spill"),
+    ]
     assert result.errors == []
-    assert len(result.apps) == 7
+    assert len(result.apps) == 11
     assert result.rules == ["SPILL900", "SKEW900"]
 
 
@@ -139,7 +143,8 @@ def test_findings_are_located_down_to_the_sql_query(warehouse):
 
 
 def test_findings_are_sorted_by_severity(warehouse):
-    result = analyze(warehouse, rules=[ExampleSpill(), ExampleSkew()])
+    apps = [app_id_of(warehouse, "gallery-skew"), app_id_of(warehouse, "gallery-spill")]
+    result = analyze(warehouse, app_ids=apps, rules=[ExampleSpill(), ExampleSkew()])
     assert [f.severity for f in result.findings] == [Severity.HIGH, Severity.MEDIUM]
     spill = result.findings[1]
     assert len(spill.location.task_ids) == 3
@@ -153,11 +158,11 @@ def test_threshold_override_changes_results(warehouse):
 
 def test_a_crashing_rule_does_not_stop_the_others(warehouse):
     result = analyze(warehouse, rules=[Crashes(), ExampleSpill()])
-    assert len(result.findings) == 1
-    assert len(result.errors) == 7  # once per app
+    assert len(result.findings) == 2  # spill and gc_pressure
+    assert len(result.errors) == 11  # once per app
     assert result.errors[0].message == "RuntimeError: boom"
     assert "Traceback" in result.errors[0].traceback
-    assert result.exit_code() == 2
+    assert result.exit_code() == 3
 
 
 def test_exit_codes(warehouse):
