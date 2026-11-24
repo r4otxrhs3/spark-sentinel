@@ -21,7 +21,7 @@ from spark_sentinel.parser import SCHEMA, EventParser, ParsedApp, parse
 from spark_sentinel.reader import open_log
 
 GALLERY = Path(__file__).parent / "fixtures" / "eventlogs" / "gallery"
-JOBS = ["clean", "skew", "spill", "udf_filter", "small_files", "over_partitioned"]
+JOBS = ["clean", "skew", "spill", "udf_filter", "small_files", "over_partitioned", "cross_join"]
 MB = 1024 * 1024
 
 
@@ -41,6 +41,7 @@ EXPECTED_COUNTS = {
     "udf_filter": (6, 3, 3, 4, 1, 1),
     "small_files": (533, 3, 3, 4, 1, 1),
     "over_partitioned": (1006, 4, 4, 7, 1, 1),
+    "cross_join": (17, 2, 2, 3, 1, 1),
 }
 
 
@@ -150,7 +151,7 @@ def test_spill_signal():
     tasks = parsed("spill")["tasks"]
     assert sum(t["disk_spill_bytes"] for t in tasks) > 200 * MB
     assert sum(t["mem_spill_bytes"] for t in tasks) > 200 * MB
-    for job in ("clean", "skew", "udf_filter", "small_files", "over_partitioned"):
+    for job in ("clean", "skew", "udf_filter", "small_files", "over_partitioned", "cross_join"):
         assert sum(t["disk_spill_bytes"] for t in parsed(job)["tasks"]) == 0
 
 

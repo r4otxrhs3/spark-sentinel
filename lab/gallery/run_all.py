@@ -18,7 +18,15 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from _spark import DATA, LOGS  # noqa: E402
 
-JOBS = ["clean", "skew", "spill", "udf_filter", "small_files", "over_partitioned"]
+JOBS = [
+    "clean",
+    "skew",
+    "spill",
+    "udf_filter",
+    "small_files",
+    "over_partitioned",
+    "cross_join",
+]
 
 
 def run(script: str) -> bool:

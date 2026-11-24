@@ -125,7 +125,7 @@ def test_example_rules_find_exactly_the_right_apps(warehouse):
     hits = sorted((f.rule_id, names[f.location.app_id]) for f in result.findings)
     assert hits == [("SKEW900", "gallery-skew"), ("SPILL900", "gallery-spill")]
     assert result.errors == []
-    assert len(result.apps) == 6
+    assert len(result.apps) == 7
     assert result.rules == ["SPILL900", "SKEW900"]
 
 
@@ -154,7 +154,7 @@ def test_threshold_override_changes_results(warehouse):
 def test_a_crashing_rule_does_not_stop_the_others(warehouse):
     result = analyze(warehouse, rules=[Crashes(), ExampleSpill()])
     assert len(result.findings) == 1
-    assert len(result.errors) == 6  # once per app
+    assert len(result.errors) == 7  # once per app
     assert result.errors[0].message == "RuntimeError: boom"
     assert "Traceback" in result.errors[0].traceback
     assert result.exit_code() == 2

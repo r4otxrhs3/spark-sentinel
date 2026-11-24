@@ -23,6 +23,7 @@ from typing import Any
 import duckdb
 
 from spark_sentinel.findings import Finding, Location, Severity
+from spark_sentinel.plan import PlanNode, final_nodes
 from spark_sentinel.rules import Rule, load_builtin_rules
 from spark_sentinel.store import Warehouse, run_query
 
@@ -45,6 +46,8 @@ SPARK_DEFAULTS: dict[str, str] = {
     "spark.memory.storageFraction": "0.5",
     "spark.dynamicAllocation.enabled": "false",
 }
+
+RESERVED_MEMORY_BYTES = 300 * 1024 * 1024  # Spark keeps 300 MB of each JVM heap for itself
 
 _SIZE_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*([kmgtp]?)(i?b)?\s*$", re.IGNORECASE)
 _SIZE_POWER = {"": 0, "k": 1, "m": 2, "g": 3, "t": 4, "p": 5}
@@ -108,6 +111,50 @@ class AnalysisContext:
 
     def conf_is_default(self, key: str) -> bool:
         return key not in self.config
+
+    # --- plans
+
+    @cached_property
+    def plans(self) -> dict[int, list[PlanNode]]:
+        """SQL execution id -> the nodes of its final physical plan (what actually ran)."""
+        rows = self.rows("SELECT execution_id, final_plan FROM sql ORDER BY execution_id")
+        return {r["execution_id"]: final_nodes(r["final_plan"]) for r in rows}
+
+    def plan_for_stage(self, stage_id: int) -> list[PlanNode]:
+        """Final plan nodes of the SQL query that ran this stage ([] for non-SQL stages)."""
+        exec_id = self._stage_links.get(stage_id, {}).get("sql_execution_id")
+        return self.plans.get(exec_id, []) if exec_id is not None else []
+
+    # --- resources
+
+    @cached_property
+    def is_local(self) -> bool:
+        return str(self.conf("spark.master", "")).startswith("local")
+
+    @cached_property
+    def executor_cores(self) -> int:
+        """Cores (task slots) per executor. In local mode the driver is the only executor."""
+        where = "" if self.is_local else "WHERE executor_id <> 'driver'"
+        cores = self.scalar(f"SELECT max(cores) FROM executors {where}")
+        return int(cores or self.conf("spark.executor.cores") or 1)
+
+    @cached_property
+    def total_cores(self) -> int:
+        where = "" if self.is_local else "WHERE executor_id <> 'driver'"
+        cores = self.scalar(f"SELECT sum(cores) FROM executors {where}")
+        return int(cores or self.executor_cores)
+
+    @cached_property
+    def executor_memory_bytes(self) -> int:
+        key = "spark.driver.memory" if self.is_local else "spark.executor.memory"
+        return self.conf_bytes(key, default_unit="m") or 1024**3
+
+    @cached_property
+    def memory_per_task_bytes(self) -> int:
+        """Rough execution memory one task can use: (heap - 300 MB) x memory.fraction / cores."""
+        fraction = float(self.conf("spark.memory.fraction") or 0.6)
+        usable = max(self.executor_memory_bytes - RESERVED_MEMORY_BYTES, 0) * fraction
+        return int(usable / max(self.executor_cores, 1))
 
     # --- locations
 

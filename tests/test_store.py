@@ -27,6 +27,7 @@ EXPECTED_TASKS = {
     "gallery-udf_filter": 6,
     "gallery-small_files": 533,
     "gallery-over_partitioned": 1006,
+    "gallery-cross_join": 17,
 }
 
 
@@ -75,7 +76,7 @@ def minimal_events(app_id="local-1", tasks=2) -> list[dict]:
 
 def test_every_app_has_every_table_file_and_a_manifest(warehouse):
     app_dirs = sorted(p for p in (warehouse.root / "apps").iterdir() if p.is_dir())
-    assert len(app_dirs) == 6
+    assert len(app_dirs) == 7
     for app_dir in app_dirs:
         assert {p.name for p in app_dir.iterdir()} == {f"{t}.parquet" for t in SCHEMA} | {
             "_manifest.json"
@@ -305,15 +306,15 @@ def test_cli_ingest_apps_and_sql(tmp_path):
 
     result = runner.invoke(app, ["ingest", str(GALLERY), "-w", wh])
     assert result.exit_code == 0, result.output
-    assert result.output.count("ingested") == 6
+    assert result.output.count("ingested") == 7
 
     result = runner.invoke(app, ["apps", "-w", wh])
     assert result.exit_code == 0, result.output
-    assert "gallery-over_partitioned" in result.output and "(6 rows)" in result.output
+    assert "gallery-over_partitioned" in result.output and "(7 rows)" in result.output
 
     result = runner.invoke(app, ["sql", "SELECT count(*) AS n FROM tasks", "-w", wh])
     assert result.exit_code == 0, result.output
-    assert "1603" in result.output
+    assert "1620" in result.output
 
 
 def test_cli_sql_errors_are_readable(tmp_path):
