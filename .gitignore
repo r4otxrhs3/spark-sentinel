@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tools
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Spark output from lab jobs
+lab/out/
+lab/eventlogs/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Sentinel output
+.sentinel/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+lab/data/
