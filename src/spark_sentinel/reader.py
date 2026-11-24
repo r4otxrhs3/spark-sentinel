@@ -213,13 +213,63 @@ def _open_decoded(path: Path) -> io.BufferedIOBase:
     if codec == "plain":
         return path.open("rb", buffering=1 << 20)
     if codec == "gzip":
-        return gzip.open(path, "rb")
-    # Spark writes zstd logs as many small frames (one per flush). Without read_across_frames,
-    # python-zstandard may report end-of-stream at the first frame boundary.
-    reader = zstandard.ZstdDecompressor().stream_reader(
-        path.open("rb"), read_across_frames=True, closefd=True
-    )
-    return io.BufferedReader(reader, buffer_size=1 << 20)
+        return gzip.open(path, "rb")  # raises EOFError if the stream is cut off
+    return io.BufferedReader(_ZstdFrames(path.open("rb")), buffer_size=1 << 20)
+
+
+class _ZstdFrames(io.RawIOBase):
+    """Decompress a file of concatenated zstd frames, and notice if the last one is cut off.
+
+    Spark writes zstd event logs as many small frames (one per flush). python-zstandard's
+    stream_reader can silently return nothing for an incomplete final frame, so a truncated
+    log would lose its tail without any error. Here each frame gets its own decompressor,
+    whose `eof` flag says whether that frame was complete: if the file ends mid-frame we raise
+    EOFError, which _file_lines turns into "truncated" (or tolerates for in-progress logs).
+    """
+
+    CHUNK = 1 << 16  # 64 KB of compressed input at a time keeps memory flat (logs compress ~30x)
+
+    def __init__(self, raw: io.BufferedIOBase) -> None:
+        self._raw = raw
+        self._dctx = zstandard.ZstdDecompressor()
+        self._frame = self._dctx.decompressobj()
+        self._in_frame = False  # bytes of the current frame have been fed
+        self._out = b""
+        self._pos = 0
+        self._done = False
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        while self._pos >= len(self._out) and not self._done:
+            chunk = self._raw.read(self.CHUNK)
+            if not chunk:
+                self._done = True
+                if self._in_frame:
+                    raise EOFError("zstd stream ends in the middle of a frame")
+                break
+            self._out, self._pos = self._decompress(chunk), 0
+        n = min(len(buffer), len(self._out) - self._pos)
+        buffer[:n] = memoryview(self._out)[self._pos : self._pos + n]
+        self._pos += n
+        return n
+
+    def _decompress(self, data: bytes) -> bytes:
+        parts = []
+        while data:
+            parts.append(self._frame.decompress(data))
+            self._in_frame = True
+            if not self._frame.eof:
+                break  # need more input to finish this frame
+            data = self._frame.unused_data  # the start of the next frame, if any
+            self._frame = self._dctx.decompressobj()
+            self._in_frame = False
+        return b"".join(parts)
+
+    def close(self) -> None:
+        self._raw.close()
+        super().close()
 
 
 def _file_lines(path: Path, tolerate_truncation: bool) -> Iterator[bytes]:

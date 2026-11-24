@@ -15,6 +15,7 @@ import typer
 from spark_sentinel import __version__
 from spark_sentinel.parser import SCHEMA, parse
 from spark_sentinel.reader import EventLogError, open_log
+from spark_sentinel.store import DEFAULT_WAREHOUSE, StoreError, Warehouse, ingest
 
 app = typer.Typer(
     name="sentinel",
@@ -152,3 +153,98 @@ def parse_command(
             typer.echo(f"  {n:>8}  {name}")
     if parsed.bad_lines:
         typer.echo(f"\nSkipped {parsed.bad_lines} line(s) that were not valid JSON.")
+
+
+WarehouseOption = Annotated[
+    Path, typer.Option("--warehouse", "-w", help="Folder holding ingested apps.")
+]
+
+
+@app.command("ingest")
+def ingest_command(
+    path: Annotated[
+        Path, typer.Argument(help="An event log, or a folder: every log inside is ingested.")
+    ],
+    warehouse: WarehouseOption = DEFAULT_WAREHOUSE,
+    force: Annotated[bool, typer.Option(help="Re-ingest logs that haven't changed.")] = False,
+) -> None:
+    """Parse event logs once and store their tables as Parquet."""
+    try:
+        results = ingest(path, warehouse, force=force)
+    except (EventLogError, StoreError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    rows = [
+        (
+            r.status,
+            r.app_id,
+            r.rows["tasks"],
+            r.rows["stages"],
+            r.rows["sql"],
+            "yes" if r.completed else "NO",
+            ", ".join(r.unhandled_events) or "-",
+        )
+        for r in results
+    ]
+    _print_table(["status", "app_id", "tasks", "stages", "sql", "complete", "unhandled"], rows)
+    typer.echo(f"\nWarehouse: {Path(warehouse).resolve()}")
+
+
+@app.command("apps")
+def apps_command(warehouse: WarehouseOption = DEFAULT_WAREHOUSE) -> None:
+    """List the apps in the warehouse."""
+    wh = Warehouse(warehouse)
+    manifests = wh.manifests()
+    if not manifests:
+        typer.echo(f"No apps in {wh.root}. Run: sentinel ingest <event log>")
+        return
+    _columns, rows = wh.query(
+        "SELECT app_id, app_name, spark_version, master, round(duration_ms / 1000, 1) "
+        "FROM app ORDER BY app_id"
+    )
+    tasks = {m["app_id"]: m["rows"]["tasks"] for m in manifests}
+    _print_table(
+        ["app_id", "name", "spark", "master", "seconds", "tasks"],
+        [(*row, tasks.get(row[0])) for row in rows],
+    )
+    stale = wh.stale_apps()
+    if stale:
+        typer.echo(f"\nOld schema version, re-ingest with --force: {', '.join(stale)}")
+
+
+@app.command("sql")
+def sql_command(
+    query: Annotated[str, typer.Argument(help="SQL over: " + ", ".join(SCHEMA) + ".")],
+    warehouse: WarehouseOption = DEFAULT_WAREHOUSE,
+    app_id: Annotated[
+        str | None, typer.Option("--app", help="Only this app (default: all apps).")
+    ] = None,
+    max_rows: Annotated[int, typer.Option(help="Print at most this many rows.")] = 50,
+) -> None:
+    """Run SQL against the stored tables with DuckDB."""
+    try:
+        columns, rows = Warehouse(warehouse).query(query, app_id=app_id)
+    except StoreError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:  # DuckDB syntax/binder errors: show them plainly
+        typer.echo(f"SQL error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_table(columns, rows[:max_rows])
+    if len(rows) > max_rows:
+        typer.echo(f"... {len(rows) - max_rows} more rows (use --max-rows)")
+
+
+def _print_table(columns: list[str], rows: list[tuple], max_width: int = 48) -> None:
+    def cell(value: object) -> str:
+        text = "" if value is None else str(value).replace("\n", " ")
+        return text if len(text) <= max_width else text[: max_width - 3] + "..."
+
+    cells = [[cell(v) for v in row] for row in rows]
+    widths = [max([len(c)] + [len(r[i]) for r in cells]) for i, c in enumerate(columns)]
+    typer.echo("  ".join(c.ljust(w) for c, w in zip(columns, widths, strict=True)).rstrip())
+    typer.echo("  ".join("-" * w for w in widths))
+    for r in cells:
+        typer.echo("  ".join(v.ljust(w) for v, w in zip(r, widths, strict=True)).rstrip())
+    typer.echo(f"({len(rows)} row{'s' if len(rows) != 1 else ''})")

@@ -131,6 +131,32 @@ def test_complete_zstd_that_is_truncated_raises(tmp_path):
         list(open_log(tmp_path / "local-5.zstd").lines())
 
 
+def test_complete_single_frame_zstd_that_is_truncated_raises(tmp_path):
+    # One big frame cut short: python-zstandard's stream reader returns NO bytes and no
+    # error for this, so without frame checking the whole log would silently vanish.
+    data = zstandard.ZstdCompressor().compress(joined(make_events(50)))
+    (tmp_path / "local-6.zstd").write_bytes(data[:-9])
+    with pytest.raises(EventLogError, match="middle of a frame"):
+        list(open_log(tmp_path / "local-6.zstd").lines())
+
+
+def test_zstd_cut_inside_last_frame_is_detected_even_at_a_line_boundary(tmp_path):
+    lines = make_events(20)
+    data = zstd_frame_per_line(lines[:-1])
+    last = zstandard.ZstdCompressor().compress(lines[-1] + b"\n")
+    (tmp_path / "local-6.zstd").write_bytes(data + last[:4])  # only the new frame's header
+    with pytest.raises(EventLogError, match="middle of a frame"):
+        list(open_log(tmp_path / "local-6.zstd").lines())
+
+
+def test_real_log_truncated_mid_frame_raises(tmp_path):
+    real = next((FIXTURES / "clean_rolled").rglob("events_1_*"))
+    data = real.read_bytes()
+    (tmp_path / "local-1.zstd").write_bytes(data[: len(data) // 2])
+    with pytest.raises(EventLogError, match="truncated"):
+        list(open_log(tmp_path / "local-1.zstd").lines())
+
+
 def test_complete_plain_log_cut_mid_line_raises(tmp_path):
     (tmp_path / "local-5").write_bytes(joined(make_events(3)) + b'{"Event":"Spark')
     with pytest.raises(EventLogError, match="incomplete JSON event"):
