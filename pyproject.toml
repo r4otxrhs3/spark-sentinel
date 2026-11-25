@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-authors = [{ name = "Rittika Sarkar" }]
+authors = [{ name = "Rittika" }]
 keywords = [
     "spark", "pyspark", "apache-spark", "performance", "event-log", "data-engineering",
     "linter", "ci",
@@ -43,7 +43,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.8", "build>=1.2", "twine>=6"]
+dev = ["pytest>=8", "ruff>=0.8", "build>=1.2", "twine>=6", "pyyaml>=6", "actionlint-py>=1.7"]
 # Only for running the PySpark jobs in lab/ that generate event logs.
 lab = ["pyspark>=4.0"]
 
@@ -74,6 +74,8 @@ include = [
     "/tests",
     "/docs",
     "/lab/gallery/README.md",
+    "/action",
+    "/action.yml",
     "/README.md",
     "/CHANGELOG.md",
     "/CONTRIBUTING.md",

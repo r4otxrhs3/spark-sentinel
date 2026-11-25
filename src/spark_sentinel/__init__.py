@@ -1,3 +1,3 @@
 """Spark Sentinel: find performance problems in Apache Spark jobs from their event logs."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -16,16 +16,49 @@ from spark_sentinel.rules import Rule
 from spark_sentinel.rules._common import clean_expr, query_input_records, spark_version
 
 _PYTHON_EVAL = ("BatchEvalPython", "ArrowEvalPython")
-_UDF_CALL = re.compile(r"(\w+)\([^()]*\)#\d+")
+_UDF_CALL = re.compile(r"^(\w+)\(.*\)#\d+$", re.DOTALL)
+
+
+def _top_level_items(text: str) -> list[str]:
+    """The comma-separated items of the first [...] list in text, respecting nesting:
+    "[f((a * 2) % 5)#3, g(b)#4], [x#9]" -> ["f((a * 2) % 5)#3", "g(b)#4"]."""
+    start = text.find("[")
+    if start < 0:
+        return []
+    items, depth, current = [], 0, []
+    for char in text[start + 1 :]:
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            if depth == 0:  # the list's own closing bracket
+                break
+            depth -= 1
+        if char == "," and depth == 0:
+            items.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    items.append("".join(current).strip())
+    return [item for item in items if item]
 
 
 def _udf_names(nodes: list[PlanNode]) -> list[str]:
+    """Names of the Python UDFs a BatchEvalPython / ArrowEvalPython node calls. Its first
+    argument list holds the calls, e.g. [size_band((cast(amount as double) / 100.0))#43]."""
     names: list[str] = []
     for node in nodes:
         if node.name in _PYTHON_EVAL:
-            first_list = node.get("Arguments", "").split("], [")[0]
-            names += [n for n in _UDF_CALL.findall(first_list) if n not in names]
+            for item in _top_level_items(node.get("Arguments", "")):
+                match = _UDF_CALL.match(item)
+                if match and match.group(1) not in names:
+                    names.append(match.group(1))
     return names
+
+
+def _udf_subject(names: list[str]) -> str:
+    """'Python UDF size_band', or 'A Python UDF' when the plan doesn't show a name."""
+    real = [n for n in names if n != "a Python UDF"]
+    return f"Python UDF {', '.join(real)}" if real else "A Python UDF"
 
 
 class PythonUdfFilter(Rule):
@@ -74,7 +107,7 @@ class PythonUdfFilter(Rule):
             yield Finding(
                 rule_id=self.id,
                 severity=Severity.MEDIUM if unpushed else Severity.LOW,
-                title=f"Query {exec_id}: Python UDF {udf_list} in a filter blocks pushdown",
+                title=f"Query {exec_id}: {_udf_subject(udfs)} in a filter blocks pushdown",
                 location=ctx.locate_sql(exec_id, plan_node=filt.label),
                 evidence=tuple(evidence),
                 cause=(
@@ -197,7 +230,7 @@ class RowByRowPythonUdf(Rule):
             yield Finding(
                 rule_id=self.id,
                 severity=Severity.MEDIUM,
-                title=f"Query {exec_id}: Python UDF {udfs} runs row by row",
+                title=f"Query {exec_id}: {_udf_subject(_udf_names(row_by_row))} runs row by row",
                 location=ctx.locate_sql(exec_id, plan_node=row_by_row[0].label),
                 evidence=tuple(evidence),
                 cause=self._cause(ctx, version),

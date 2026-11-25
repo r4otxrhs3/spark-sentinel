@@ -221,6 +221,7 @@ def test_plan_info_keys():
     a, b = plan_info(PLAN_A, None), plan_info(_renumber(PLAN_A), None)
     assert (a.plan_key, a.shape_key, a.sources_key) == (b.plan_key, b.shape_key, b.sources_key)
     assert a.target == "out/spent"
+    assert a.written == ("user_id", "spent")
 
     more_partitions = plan_info(PLAN_A.replace("16)", "200)"), None)
     assert more_partitions.plan_key != a.plan_key  # a different plan...
@@ -232,6 +233,19 @@ def test_plan_info_keys():
 
     other_input = plan_info(PLAN_A.replace("amount:double", "amount:decimal"), None)
     assert other_input.sources_key != a.sources_key
+
+
+def test_renamed_output_column_is_named_not_just_a_plan_change():
+    from spark_sentinel.diff.compare import _compare_query
+
+    renamed = PLAN_A.replace("[user_id, spent]", "[user_id, total_spent]")
+    base = QueryRun(0, "", 1000, None, plan_info(PLAN_A, None), {})
+    new = QueryRun(0, "", 1050, None, plan_info(renamed, None), {})
+    limits = diff_thresholds("laptop")
+    q = _compare_query(base, new, limits, [])
+    assert q.status == "changed"
+    assert q.reasons == ["the columns it writes changed (spent → total_spent)"]
+    assert q.headline == f"Query 0: same speed, but it changed: {q.reasons[0]}"
 
 
 def test_plan_diff_lines_drop_headers_and_shared_indent():

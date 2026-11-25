@@ -94,6 +94,7 @@ class PlanInfo:
     python_evals: Counter[str]
     shuffles: int
     target: str | None  # where it writes, e.g. "report/revenue" (last two path parts)
+    written: tuple[str, ...] = ()  # the columns it writes, if it writes
 
 
 def plan_info(initial_plan: str | None, final_plan: str | None) -> PlanInfo:
@@ -115,6 +116,7 @@ def plan_info(initial_plan: str | None, final_plan: str | None) -> PlanInfo:
         python_evals=Counter(n for n in names if n in PYTHON_EVALS),
         shuffles=sum(1 for n in ran if n.name == "Exchange"),
         target=_target(ran),
+        written=_written_columns(ran),
     )
 
 
@@ -146,6 +148,17 @@ def _final_tree_lines(plan: str | None) -> tuple[str, ...]:
     lines = [_apply(line) for line in tree if line.strip()]
     indent = min((len(line) - len(line.lstrip()) for line in lines), default=0)
     return tuple(line[indent:] for line in lines)
+
+
+def _written_columns(ran: list[PlanNode]) -> tuple[str, ...]:
+    """The column list at the end of a write's arguments: "..., Overwrite, [a, b]"."""
+    for node in ran:
+        if node.name.startswith("Execute "):
+            arguments = normalize(node.get("Arguments") or "")
+            match = re.search(r"\[([^\[\]]*)\]\s*$", arguments)
+            if match:
+                return tuple(c.strip() for c in match.group(1).split(",") if c.strip())
+    return ()
 
 
 def _target(ran: list[PlanNode]) -> str | None:

@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-25)
+
+**GitHub Action** (`uses: r4otxrhs3/spark-sentinel@v0.2.0`): runs `sentinel diff` on two event
+logs, writes the report to the job summary, posts it as a PR comment (updated in place on each
+push), and fails the check when `fail-on` matches. Installs into its own virtual environment;
+inputs reach scripts only through environment variables. Pull requests from forks, which get a
+read-only token, still get the job summary and the verdict. Demo:
+[spark-sentinel-demo](https://github.com/r4otxrhs3/spark-sentinel-demo).
 
 **`sentinel diff BASELINE NEW`** compares two runs of the same app. It normalizes plans
 (expression IDs, operator numbers, paths), matches queries by plan and then by what they read
@@ -15,6 +22,9 @@ lists changed settings and new or fixed problems. Text, Markdown and JSON;
 
 `lab/diff/`: a report job with one-line changes (broadcast join off, row-by-row Python UDF,
 extra query) for testing diff, with its runs as test fixtures.
+
+Fixes: PLAN001 and PLAN005 now find the UDF's name when it's called on an expression
+(`size_band((cast(amount as double) / 100.0))`), and no longer say "Python UDF a Python UDF".
 
 ## 0.1.0 (2026-11-24)
 

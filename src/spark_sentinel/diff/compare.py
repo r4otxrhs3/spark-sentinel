@@ -593,7 +593,16 @@ def _reasons(
             reasons.append(f"it {verb} {format_bytes(c.after)} (was {format_bytes(c.before)})")
 
     if plan_changed and not reasons:
-        reasons.append("its plan changed" + _related("shuffle", settings))
+        w0, w1 = p0.written, p1.written
+        if w0 and w1 and w0 != w1:
+            gone = [c for c in w0 if c not in w1]
+            came = [c for c in w1 if c not in w0]
+            change = f"{', '.join(gone) or '-'} → {', '.join(came) or '-'}" if gone or came else ""
+            reasons.append(
+                "the columns it writes changed" + (f" ({change})" if change else " order")
+            )
+        else:
+            reasons.append("its plan changed" + _related("shuffle", settings))
 
     # Timing details explain a slowdown but don't confirm one by themselves.
     if reasons:

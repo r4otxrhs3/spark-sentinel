@@ -1,0 +1,68 @@
+name: Action self-test
+
+# Runs this repository's GitHub Action (action.yml) on the diff fixtures, on a real runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: A slowdown is found and reported
+        id: slower
+        uses: ./
+        with:
+          baseline: tests/fixtures/eventlogs/diff/base
+          new: tests/fixtures/eventlogs/diff/python_udf
+          profile: laptop
+          fail-on: never
+          comment: "false"
+
+      - name: Two identical runs report nothing
+        id: quiet
+        uses: ./
+        with:
+          baseline: tests/fixtures/eventlogs/diff/base
+          new: tests/fixtures/eventlogs/diff/rerun
+          profile: laptop
+          comment: "false"
+
+      - name: fail-on slower fails the step
+        id: failing
+        continue-on-error: true
+        uses: ./
+        with:
+          baseline: tests/fixtures/eventlogs/diff/base
+          new: tests/fixtures/eventlogs/diff/no_broadcast
+          profile: laptop
+          fail-on: slower
+          comment: "false"
+
+      - name: Check the outputs
+        env:
+          SLOWER_RESULT: ${{ steps.slower.outputs.result }}
+          SLOWER_CONFIRMED: ${{ steps.slower.outputs.confirmed-slower }}
+          SLOWER_PROBLEMS: ${{ steps.slower.outputs.new-problems }}
+          SLOWER_REPORT: ${{ steps.slower.outputs.report }}
+          QUIET_RESULT: ${{ steps.quiet.outputs.result }}
+          QUIET_SLOWER: ${{ steps.quiet.outputs.slower }}
+          FAILING_OUTCOME: ${{ steps.failing.outcome }}
+          FAILING_RESULT: ${{ steps.failing.outputs.result }}
+        run: |
+          set -euo pipefail
+          test "$SLOWER_RESULT" = pass
+          test "$SLOWER_CONFIRMED" = 1
+          test "$SLOWER_PROBLEMS" = 1
+          grep -q "row-by-row Python UDF" "$SLOWER_REPORT"
+          test "$QUIET_RESULT" = pass
+          test "$QUIET_SLOWER" = 0
+          test "$FAILING_OUTCOME" = failure
+          test "$FAILING_RESULT" = fail
+          echo "Action self-test passed."

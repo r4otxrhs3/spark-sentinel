@@ -1,0 +1,112 @@
+name: Spark Sentinel diff
+description: >-
+  Compare a Spark job's event log from a pull request with a baseline run, and post what got
+  slower and why as a PR comment.
+author: r4otxrhs3
+branding:
+  icon: activity
+  color: orange
+
+inputs:
+  baseline:
+    description: The baseline run (e.g. the PR's base branch). An event log file, or a folder holding one run's log.
+    required: true
+  new:
+    description: The new run (the pull request). An event log file, or a folder holding one run's log.
+    required: true
+  profile:
+    description: >-
+      Threshold profile: `laptop` for small CI jobs, `default` for cluster-sized ones. Empty uses
+      the profile in `config`, else `default`.
+    default: ""
+  fail-on:
+    description: >-
+      Fail the check on: `slower` (a confirmed slowdown or a failed query), a severity (`high`,
+      `medium`, ...) for a new problem at least that severe, or `never`. Comma-separated.
+    default: slower
+  thresholds:
+    description: Diff thresholds to override, one `name=value` per line (min_change_pct, min_time_ms, min_bytes).
+    default: ""
+  config:
+    description: Path to a sentinel.toml (profile, rule thresholds, and a [diff] table).
+    default: ""
+  comment:
+    description: Post the report as a PR comment (updated in place on each push). The job summary always gets it.
+    default: "true"
+  comment-key:
+    description: Tells apart several Sentinel comments on one PR (one per job or app).
+    default: default
+  github-token:
+    description: "Token used to comment. Needs `pull-requests: write`."
+    default: ${{ github.token }}
+  sentinel-version:
+    description: >-
+      Spark Sentinel version to install from PyPI, e.g. `0.2.0`. Empty (the default) installs the
+      code at the ref of this action, so `@v0.2.0` runs exactly 0.2.0.
+    default: ""
+  python:
+    description: Python interpreter (3.11+) used to create Sentinel's own virtual environment.
+    default: python3
+
+outputs:
+  result:
+    description: "`pass`, `fail` (fail-on matched) or `error`."
+    value: ${{ steps.diff.outputs.result }}
+  confirmed-slower:
+    description: Number of queries that got slower with a visible cause.
+    value: ${{ steps.diff.outputs.confirmed-slower }}
+  slower:
+    description: Number of queries that got slower, confirmed or not.
+    value: ${{ steps.diff.outputs.slower }}
+  new-problems:
+    description: Number of problems found in the new run but not in the baseline.
+    value: ${{ steps.diff.outputs.new-problems }}
+  report:
+    description: Path of the Markdown report.
+    value: ${{ steps.diff.outputs.report }}
+  comment:
+    description: "What happened to the PR comment: created, updated, off, not-a-pr, forbidden or failed."
+    value: ${{ steps.diff.outputs.comment }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Spark Sentinel
+      id: install
+      shell: bash
+      env:
+        PYTHON: ${{ inputs.python }}
+        SENTINEL_VERSION: ${{ inputs.sentinel-version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
+          echo "::error title=Spark Sentinel::Needs Python 3.11 or newer; '$PYTHON' is $("$PYTHON" --version 2>&1). Add actions/setup-python before this step."
+          exit 2
+        fi
+        venv="$RUNNER_TEMP/spark-sentinel-venv"
+        "$PYTHON" -m venv "$venv"
+        if [ -n "$SENTINEL_VERSION" ]; then
+          "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "spark-sentinel==$SENTINEL_VERSION"
+        else
+          "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "$ACTION_PATH"
+        fi
+        "$venv/bin/python" -m spark_sentinel version
+        echo "python=$venv/bin/python" >> "$GITHUB_OUTPUT"
+
+    - name: Compare runs
+      id: diff
+      shell: bash
+      env:
+        SENTINEL_BASELINE: ${{ inputs.baseline }}
+        SENTINEL_NEW: ${{ inputs.new }}
+        SENTINEL_PROFILE: ${{ inputs.profile }}
+        SENTINEL_FAIL_ON: ${{ inputs.fail-on }}
+        SENTINEL_THRESHOLDS: ${{ inputs.thresholds }}
+        SENTINEL_CONFIG: ${{ inputs.config }}
+        SENTINEL_COMMENT: ${{ inputs.comment }}
+        SENTINEL_COMMENT_KEY: ${{ inputs.comment-key }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        ACTION_PATH: ${{ github.action_path }}
+        SENTINEL_PYTHON: ${{ steps.install.outputs.python }}
+      run: '"$SENTINEL_PYTHON" "$ACTION_PATH/action/run_action.py"'

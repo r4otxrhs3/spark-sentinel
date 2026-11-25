@@ -18,6 +18,8 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
+      - name: Lint workflows and action.yml
+        run: actionlint
 
   test:
     runs-on: ubuntu-latest

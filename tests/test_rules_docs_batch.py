@@ -114,6 +114,32 @@ def test_row_by_row_python_udf(gallery):
     assert not [x for x in gallery["udf_filter"] if x.rule_id == "PLAN005"]  # that's PLAN001
 
 
+def test_udf_names_with_nested_arguments():
+    """A UDF called on an expression has nested parentheses and brackets in its argument."""
+    from spark_sentinel.plan import parse_nodes
+    from spark_sentinel.rules.plan_smells import _udf_names
+
+    plan = """== Physical Plan ==
+* Project (3)
++- BatchEvalPython (2)
+   +- * Range (1)
+
+(2) BatchEvalPython
+Input [1]: [id#38L]
+Arguments: [size_band((cast(((id#38L * 2654435761) % 50000) as double) / 100.0))#43, \
+tag(array(a#1, b#2)[0])#44, size_band(x#3)#45], [pythonUDF0#48, pythonUDF1#49]
+"""
+    nodes = list(parse_nodes(plan).values())
+    assert _udf_names(nodes) == ["size_band", "tag"]
+
+
+def test_udf_titles_without_a_name():
+    from spark_sentinel.rules.plan_smells import _udf_subject
+
+    assert _udf_subject(["size_band"]) == "Python UDF size_band"
+    assert _udf_subject([]) == "A Python UDF"  # never "Python UDF a Python UDF"
+
+
 def test_settings_that_switch_optimizations_off(gallery):
     f = only(gallery["skew"], "CONF001")
     assert f.severity is Severity.INFO

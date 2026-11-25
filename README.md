@@ -161,6 +161,53 @@ min_bytes = 268435456
 To try it, [`lab/diff/sales_report.py`](https://github.com/r4otxrhs3/spark-sentinel/blob/main/lab/diff/sales_report.py)
 runs a small report job plus one-line "pull requests" that break it.
 
+## Check every pull request
+
+The GitHub Action runs `sentinel diff` in your workflow and comments on the pull request:
+
+```yaml
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write   # to comment
+
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    steps:
+      # ... run a small Spark job twice with event logging on:
+      #     on the base branch -> $RUNNER_TEMP/events/base
+      #     on the pull request -> $RUNNER_TEMP/events/pr
+      - uses: r4otxrhs3/spark-sentinel@v0.2.0
+        with:
+          baseline: ${{ runner.temp }}/events/base
+          new: ${{ runner.temp }}/events/pr
+          profile: laptop
+          fail-on: slower
+```
+
+Running both on the same runner, one after the other, keeps machine-to-machine noise out
+of the comparison. The comment is updated in place on every push, and the report also goes to
+the job summary. [spark-sentinel-demo](https://github.com/r4otxrhs3/spark-sentinel-demo) is a
+complete example, with a bad pull request to try.
+
+| Input | Default | |
+|---|---|---|
+| `baseline`, `new` | (required) | An event log, or a folder holding one run's log |
+| `profile` | from `config`, else `default` | `laptop` for small CI jobs |
+| `fail-on` | `slower` | `slower`, a severity (`high`, `medium`, ...) for new problems, or `never` |
+| `thresholds` | | `name=value` lines: `min_change_pct`, `min_time_ms`, `min_bytes` |
+| `config` | | A `sentinel.toml` |
+| `comment` | `true` | Comment on the PR (the job summary always gets the report) |
+| `comment-key` | `default` | Keeps several Sentinel comments apart on one PR |
+| `sentinel-version` | | Install this version from PyPI instead of the action's own code |
+| `python` | `python3` | Python 3.11+ for Sentinel's own virtual environment |
+
+Outputs: `result` (`pass`, `fail` or `error`), `confirmed-slower`, `slower`, `new-problems`,
+`report` (the Markdown file) and `comment`. Pull requests from forks get a read-only token, so
+they get the job summary and the pass/fail verdict but no comment. Runs on Linux and macOS
+runners.
+
 ## Commands
 
 | Command | What it does |
@@ -186,7 +233,7 @@ Every slow task can be traced through its stage and job to the SQL query and phy
 produced it, which is how findings name the join key, the UDF or the `repartition(500)` behind a
 problem.
 
-## Limitations (v0.1)
+## Limitations
 
 - Reads local files. Copy logs from S3, HDFS or DBFS first.
 - Logs compressed with Spark's `lz4`, `lzf` or `snappy` codecs aren't supported yet (`zstd`,
