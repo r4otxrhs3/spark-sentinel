@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -100,20 +101,39 @@ def open_log(path: str | Path) -> EventLog:
 
 
 def find_logs(root: str | Path) -> list[EventLog]:
-    """Find every event log under a folder (searched recursively).
+    """Find every event log under a folder (searched recursively, following symlinks).
 
     Sorted by app ID; Spark app IDs start with a timestamp, so this is usually run order.
+    Symlinked folders are followed (log folders are often symlinks or mounts), and each real
+    folder is visited once, so a symlink loop can't make the search run forever.
     """
-    root = Path(root)
     logs: list[EventLog] = []
-    for path in sorted(root.rglob("*")):
-        if any(parent.name.startswith(ROLLING_DIR_PREFIX) for parent in path.parents):
-            continue  # files inside a rolled log belong to that log, handled below
-        if path.is_dir() and path.name.startswith(ROLLING_DIR_PREFIX):
-            logs.append(_rolling_log(path))
-        elif path.is_file() and _looks_like_log_file(path):
-            logs.append(_single_file_log(path))
-    return sorted(logs, key=lambda log: (log.app_id, str(log.path)))
+    seen: set[str] = set()
+    for folder, subfolders, files in os.walk(Path(root), followlinks=True):
+        real = os.path.realpath(folder)
+        if real in seen:
+            subfolders[:] = []
+            continue
+        seen.add(real)
+        here = Path(folder)
+        # A rolled log is an eventlog_v2_* folder, also when reached through a link with
+        # another name: judge by the real folder's name. Its files belong to it, so don't
+        # descend into it.
+        rolled = {d for d in subfolders if _is_rolling_dir(here / d)}
+        for name in sorted(rolled):
+            logs.append(_rolling_log(here / name))
+        subfolders[:] = sorted(d for d in subfolders if d not in rolled)
+        for name in sorted(files):
+            path = here / name
+            if path.is_file() and _looks_like_log_file(path):
+                logs.append(_single_file_log(path))
+    # The same log reached through two paths (a folder and a link to it) counts once.
+    unique = {os.path.realpath(log.path): log for log in sorted(logs, key=lambda x: str(x.path))}
+    return sorted(unique.values(), key=lambda log: (log.app_id, str(log.path)))
+
+
+def _is_rolling_dir(path: Path) -> bool:
+    return Path(os.path.realpath(path)).name.startswith(ROLLING_DIR_PREFIX)
 
 
 # --- resolving layouts
@@ -154,7 +174,7 @@ def _rolling_log(folder: Path) -> EventLog:
         raise EventLogError(f"Rolled log {folder} is missing part(s) {missing}")
 
     files = tuple(p for _, p in parts)
-    app_id = folder.name.removeprefix(ROLLING_DIR_PREFIX)
+    app_id = Path(os.path.realpath(folder)).name.removeprefix(ROLLING_DIR_PREFIX)
     # While the app runs, the status marker (and the newest part) carry an .inprogress suffix.
     in_progress = any(
         c.name.startswith("appstatus_") and c.name.endswith(IN_PROGRESS) for c in folder.iterdir()

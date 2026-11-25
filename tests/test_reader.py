@@ -258,6 +258,27 @@ def test_find_logs_skips_non_logs(tmp_path):
     assert [log.app_id for log in found] == ["local-1", "local-2"]
 
 
+def test_find_logs_follows_symlinked_folders(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "local-1").write_bytes(joined(make_events(1)))
+    make_rolled(real, "local-2", [make_events(1)])
+    links = tmp_path / "logs"
+    links.mkdir()
+    (links / "job-a").symlink_to(real, target_is_directory=True)
+    (links / "rolled").symlink_to(real / "eventlog_v2_local-2", target_is_directory=True)
+
+    found = find_logs(links)
+
+    assert sorted(log.app_id for log in found) == ["local-1", "local-2"]  # each once
+
+
+def test_find_logs_survives_a_symlink_loop(tmp_path):
+    (tmp_path / "local-1").write_bytes(joined(make_events(1)))
+    (tmp_path / "loop").symlink_to(tmp_path, target_is_directory=True)
+    assert [log.app_id for log in find_logs(tmp_path)] == ["local-1"]
+
+
 def test_folder_without_logs_raises(tmp_path):
     (tmp_path / "notes.md").write_text("hi")
     with pytest.raises(EventLogError, match="No Spark event logs"):

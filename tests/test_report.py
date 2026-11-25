@@ -21,7 +21,18 @@ from spark_sentinel.rules import REGISTRY, Rule
 from spark_sentinel.store import Warehouse, ingest
 
 GALLERY = Path(__file__).parent / "fixtures" / "eventlogs" / "gallery"
-runner = CliRunner()
+
+
+def _runner() -> CliRunner:
+    """Click 8.1 mixes stderr into stdout unless asked not to; Click 8.2+ always separates them
+    (and removed the option)."""
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
+
+
+runner = _runner()
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +64,11 @@ def test_text_report_matches_the_planned_format(report):
 
 
 def test_text_colour_only_when_asked(report):
-    assert "\x1b[" in render(report, "text", color=True)
+    coloured = render(report, "text", color=True)
+    assert "\x1b[" in coloured
+    # In a terminal, doc links are clickable titles (OSC 8) on one line, not raw URLs.
+    link = "\x1b]8;;https://spark.apache.org/docs/latest/sql-performance-tuning.html"
+    assert link + "#optimizing-skew-join\x1b\\Optimizing Skew Join\x1b]8;;\x1b\\" in coloured
 
 
 # --- markdown
@@ -193,6 +208,18 @@ def test_analyze_ingests_paths_and_prints_text(tmp_path):
     assert "MED   SKEW001  Stage 4" in r.stdout
     assert r.stdout.rstrip().endswith("3 findings (2 medium, 1 info) in 2 apps")
     assert "Read 1 log(s)" in r.stderr  # progress goes to stderr, not into the report
+
+
+def test_analyze_force_reingests_unchanged_logs(tmp_path):
+    skew = str(GALLERY / "skew")
+    assert "(1 new)" in analyze_cli(skew, wh=tmp_path).stderr
+    assert "(0 new)" in analyze_cli(skew, wh=tmp_path).stderr  # unchanged: skipped
+    forced = analyze_cli(skew, "--force", "--profile", "laptop", wh=tmp_path)
+    assert forced.exit_code == 0, forced.output
+    assert "(1 new)" in forced.stderr
+    assert "SKEW001" in forced.stdout
+    rows = Warehouse(tmp_path).query("SELECT count(*) FROM app")[1]
+    assert rows == [(1,)]  # replaced, not duplicated
 
 
 def test_analyze_whole_warehouse_and_single_app(tmp_path):

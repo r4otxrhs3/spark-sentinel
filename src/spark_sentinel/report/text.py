@@ -43,7 +43,7 @@ def render_text(report, *, color: bool = False, width: int = 100) -> str:
         if not app.findings:
             out += [INDENT[:2] + style("No problems found.", fg=typer.colors.GREEN), ""]
         for finding in app.findings:
-            out += _finding_lines(finding, style, wrap)  # each ends with a blank line
+            out += _finding_lines(finding, style, wrap, color)  # each ends with a blank line
 
     for error in report.result.errors:
         out.append(
@@ -57,7 +57,12 @@ def render_text(report, *, color: bool = False, width: int = 100) -> str:
     return "\n".join(out) + "\n"
 
 
-def _finding_lines(f: Finding, style, wrap) -> list[str]:
+def _hyperlink(text: str, url: str) -> str:
+    """OSC 8 terminal hyperlink; terminals without support just show the text."""
+    return f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
+
+
+def _finding_lines(f: Finding, style, wrap, color: bool) -> list[str]:
     head = style(f"{f.severity.label:<4}", fg=COLORS[f.severity], bold=True)
     lines = [f"{head}  {style(f.rule_id, bold=True)}  {f.title}"]
     where = f.location.label()
@@ -70,7 +75,13 @@ def _finding_lines(f: Finding, style, wrap) -> list[str]:
         lines += wrap(f.cause)
     for fix in f.fix:
         lines += wrap(fix, first=INDENT + "→ ", rest=INDENT + "  ")
-    for ref in f.references:
-        lines.append(INDENT + style(f"Spark docs: {ref.title} {ref.url}", dim=True))
+    if f.references and color:
+        # Interactive terminal: one line of titles, each a clickable hyperlink (OSC 8).
+        links = ", ".join(_hyperlink(ref.title, ref.url) for ref in f.references)
+        lines.append(INDENT + style("Spark docs: ", dim=True) + links)
+    else:
+        # Logs and pipes can't click: show the URLs.
+        for ref in f.references:
+            lines.append(INDENT + style(f"Spark docs: {ref.title} {ref.url}", dim=True))
     lines.append("")
     return lines

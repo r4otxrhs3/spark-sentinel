@@ -319,6 +319,9 @@ def analyze_command(
     color: Annotated[
         bool | None, typer.Option("--color/--no-color", help="Colour the text report.")
     ] = None,
+    force: Annotated[
+        bool, typer.Option(help="Re-ingest the given logs even if they haven't changed.")
+    ] = False,
 ) -> None:
     """Find performance problems and report them.
 
@@ -343,7 +346,7 @@ def analyze_command(
     targets = list(app_ids or [])
     try:
         for path in paths or []:
-            results = ingest(path, warehouse)
+            results = ingest(path, warehouse, force=force)
             targets += [r.app_id for r in results]
             new = sum(r.status == "ingested" for r in results)
             typer.echo(f"Read {len(results)} log(s) from {path} ({new} new).", err=True)
