@@ -17,6 +17,7 @@ import typer
 from spark_sentinel import __version__
 from spark_sentinel.analysis import analyze
 from spark_sentinel.config import ConfigError, load_settings
+from spark_sentinel.diff import compare, render_diff
 from spark_sentinel.parser import SCHEMA, parse
 from spark_sentinel.profiles import profile_overrides
 from spark_sentinel.reader import EventLogError, open_log
@@ -30,6 +31,29 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        typer.echo(f"spark-sentinel {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    show_version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            "-V",
+            help="Print the version and exit.",
+            callback=_print_version,
+            is_eager=True,
+        ),
+    ] = False,
+) -> None:
+    """Find performance problems in Spark jobs from their event logs."""
+
 
 CORE_DEPENDENCIES = ["typer", "orjson", "zstandard", "pyarrow", "duckdb", "jinja2"]
 OPTIONAL_DEPENDENCIES = ["pyspark", "pytest", "ruff"]
@@ -325,8 +349,7 @@ def analyze_command(
 ) -> None:
     """Find performance problems and report them.
 
-    Exit codes: 0 OK, 1 a finding at or above --fail-on, 2 bad options, 3 unreadable input or
-    a rule crashed.
+    Exit codes: 0 OK, 1 a finding at/above --fail-on, 2 bad options, 3 bad input or a rule crash.
     """
     try:
         settings = load_settings(
@@ -388,3 +411,123 @@ def analyze_command(
             f"error: rule {error.rule_id} crashed on {error.app_id}: {error.message}", err=True
         )
     raise typer.Exit(code=result.exit_code(settings.fail_on))
+
+
+DIFF_FAIL_ON = ("never", "slower", "high", "medium", "low", "info")
+
+
+def _resolve_run(arg: str, warehouse: Path, force: bool) -> str:
+    """A log file, a folder with one app's log, or an app id already ingested -> app id."""
+    path = Path(arg)
+    if path.exists():
+        results = ingest(path, warehouse, force=force)
+        app_ids = list(dict.fromkeys(r.app_id for r in results))
+        if len(app_ids) > 1:
+            raise ConfigError(
+                f"{arg} holds {len(app_ids)} apps ({', '.join(app_ids)}). Pass one run's log "
+                "(a file, or a folder with one app), or app IDs from `sentinel apps`."
+            )
+        return app_ids[0]
+    if arg in Warehouse(warehouse).app_ids():
+        return arg
+    raise ConfigError(
+        f"'{arg}' is not an event log, a folder, or an app ID in {warehouse} (see `sentinel apps`)."
+    )
+
+
+DIFF_HELP = (
+    "Compare two runs of the same app: what got slower or faster, and why."
+    "\n\n"
+    "Changes count only when they cross both a percentage and an absolute threshold. "
+    "A slowdown is confirmed when the plan, data volume, spill or a setting changed with it; "
+    "slowdowns with no visible cause are reported, but don't fail --fail-on slower."
+    "\n\n"
+    "Exit codes: 0 OK, 1 --fail-on matched, 2 bad options, 3 unreadable input."
+)
+
+
+@app.command("diff", help=DIFF_HELP)
+def diff_command(
+    baseline: Annotated[
+        str, typer.Argument(help="The run to compare against: event log, folder or app ID.")
+    ],
+    new: Annotated[str, typer.Argument(help="The new run: event log, folder or app ID.")],
+    warehouse: WarehouseOption = DEFAULT_WAREHOUSE,
+    profile: Annotated[
+        str | None, typer.Option(help="Threshold profile: default (clusters) or laptop.")
+    ] = None,
+    threshold: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Override a diff threshold: min_change_pct, min_time_ms or min_bytes, "
+            "e.g. min_time_ms=5000 (repeatable)."
+        ),
+    ] = None,
+    fail_on: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Exit with code 1 on: slower (a confirmed slowdown or a failed query), or a "
+            "severity (high, medium, ...) for a new problem at least that severe. Repeatable."
+        ),
+    ] = None,
+    problems: Annotated[
+        bool, typer.Option(help="Also run the rules and list new and fixed problems.")
+    ] = True,
+    fmt: Annotated[str, typer.Option("--format", "-f", help="text, md or json.")] = "text",
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Write the report to this file.")
+    ] = None,
+    config: Annotated[
+        Path | None, typer.Option(help="Settings file (default: ./sentinel.toml if present).")
+    ] = None,
+    color: Annotated[
+        bool | None, typer.Option("--color/--no-color", help="Colour the text report.")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option(help="Re-ingest the given logs even if they haven't changed.")
+    ] = False,
+) -> None:
+    conditions = [c.strip().lower() for item in fail_on or [] for c in item.split(",")]
+    try:
+        bad = [c for c in conditions if c not in DIFF_FAIL_ON]
+        if bad:
+            raise ConfigError(f"--fail-on {bad[0]}: choose from {', '.join(DIFF_FAIL_ON)}")
+        if fmt not in ("text", "md", "json"):
+            raise ConfigError(f"Unknown format '{fmt}' for diff. Choose from: text, md, json")
+        settings = load_settings(config, profile=profile)
+        diff_overrides = dict(settings.diff)
+        for arg in threshold or []:
+            key, sep, value = arg.partition("=")
+            if not sep:
+                raise ConfigError(f"--threshold '{arg}' must look like name=value")
+            diff_overrides[key.strip()] = value.strip()
+        base_app = _resolve_run(baseline, warehouse, force)
+        new_app = _resolve_run(new, warehouse, force)
+        result = compare(
+            Warehouse(warehouse),
+            base_app,
+            new_app,
+            profile=settings.profile,
+            thresholds=diff_overrides,
+            rule_overrides=settings.thresholds,
+            findings=problems,
+        )
+    except (EventLogError, StoreError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
+    except ValueError as exc:  # ConfigError, unknown threshold or profile
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render_diff(result, fmt), encoding="utf-8")
+        typer.echo(f"{result.summary_line()}. Report: {output}")
+    else:
+        use_color = (
+            color if color is not None else (sys.stdout.isatty() and not os.environ.get("NO_COLOR"))
+        )
+        width = min(shutil.get_terminal_size((100, 20)).columns, 100)
+        text = render_diff(result, fmt, color=bool(use_color), width=width)
+        typer.echo(text, nl=False, color=bool(use_color) or None)
+    raise typer.Exit(code=result.exit_code(conditions))

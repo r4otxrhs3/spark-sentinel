@@ -31,8 +31,10 @@ src/spark_sentinel/
   rules/          one module per family of rules
   docs_links.py   links to the Spark docs sections rules cite
   report/         text, Markdown, HTML and JSON reports
+  diff/           sentinel diff: plan normalization, query matching, comparison
   profiles.py     threshold profiles (default, laptop)
 lab/gallery/      PySpark jobs that cause each problem on purpose, plus a clean job
+lab/diff/         a report job and one-line changes to it, for testing sentinel diff
 tests/            pytest; tests/fixtures/eventlogs holds the gallery's logs (Spark 4.3, 3.5)
 docs/             event-log field spec, rule catalog, images
 scripts/          maintenance scripts (the demo GIF)

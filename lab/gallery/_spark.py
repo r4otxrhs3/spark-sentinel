@@ -21,14 +21,16 @@ OUT = ROOT / "lab" / "out"
 LOGS = ROOT / "lab" / "eventlogs" / "gallery"
 
 
-def start(job: str, conf: dict[str, str] | None = None) -> SparkSession:
-    log_dir = LOGS / job
+def start(
+    job: str, conf: dict[str, str] | None = None, *, logs: Path = LOGS, app_name: str = ""
+) -> SparkSession:
+    log_dir = logs / job
     if log_dir.exists():
         shutil.rmtree(log_dir)
     log_dir.mkdir(parents=True)
 
     builder = (
-        SparkSession.builder.appName(f"gallery-{job}")
+        SparkSession.builder.appName(app_name or f"gallery-{job}")
         .master("local[4]")
         .config("spark.eventLog.enabled", "true")
         .config("spark.eventLog.dir", log_dir.as_uri())

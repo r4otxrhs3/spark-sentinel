@@ -107,11 +107,66 @@ ignore  = ["CONF001"]
 min_time_lost_ms = 60000
 ```
 
+## Compare two runs
+
+`sentinel diff` compares a baseline run (say, from `main`) with a new one (from a pull
+request) and explains what got slower:
+
+```console
+$ sentinel diff base-run/ pr-run/ --profile laptop
+SLOWER  Query 0: 1.5x slower (3.9s → 6.0s): the broadcast join became a sort-merge join, which adds
+        2 shuffles (after spark.sql.autoBroadcastJoinThreshold changed from the default to -1)
+        writes report/revenue
+        task time 6.0s → 14.3s · shuffle 7.0 KB → 26.3 MB
+        Plan (- before, + after):
+          -   +- * BroadcastHashJoin Inner BuildRight
+          +   +- * SortMergeJoin Inner
+          ...
+
+Settings changed
+  spark.sql.autoBroadcastJoinThreshold: (default) → -1
+
+New problems
+  MED   PLAN004  Query 0: sort-merge join where one side is only 3.1 MB
+```
+
+- **Queries are matched by what they do, not by their IDs.** Plans are normalized
+  (expression IDs, operator numbers and paths removed), then matched by plan, then by what
+  they read and write. Adding a query doesn't throw off the rest.
+- **Noise is filtered.** A change counts only if it crosses both a percentage and an absolute
+  threshold (laptop profile: 30% and 1 s or 8 MB; default: 25% and 30 s or 256 MB).
+- **A slowdown is *confirmed* only if something deterministic changed with it**: the join
+  strategy, a Python UDF, the number of shuffles, spill, data volume or a related setting.
+  A slowdown with no visible cause is reported as possible noise and doesn't fail
+  `--fail-on slower`. (Wall time is noisy: a cold first run of an unchanged job measured 1.7x
+  slower.)
+- **New and fixed problems**: the rules run on both runs, so a pull request that introduces
+  a problem shows up even when it isn't slower yet.
+
+```bash
+sentinel diff baseline/ new/ --fail-on slower --fail-on high -f md -o diff.md
+```
+
+Each side is an event log, a folder holding one run's log, or an app ID from
+`sentinel apps`. Thresholds can be changed with `--threshold min_time_ms=5000` or in
+`sentinel.toml`:
+
+```toml
+[diff]
+min_change_pct = 25
+min_time_ms = 10000
+min_bytes = 268435456
+```
+
+To try it, [`lab/diff/sales_report.py`](https://github.com/r4otxrhs3/spark-sentinel/blob/main/lab/diff/sales_report.py)
+runs a small report job plus one-line "pull requests" that break it.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `sentinel analyze PATH...` | Read logs (if given) and report problems: `--format text\|md\|html\|json`, `--profile`, `--select`, `--ignore`, `--threshold RULE.name=value`, `--fail-on` |
+| `sentinel diff BASELINE NEW` | Compare two runs: queries slower or faster and why, settings changed, new and fixed problems: `--format text\|md\|json`, `--fail-on slower\|<severity>`, `--threshold name=value` |
 | `sentinel ingest PATH` | Parse logs once into a local Parquet warehouse (`.sentinel/`) |
 | `sentinel sql "SELECT ..."` | Query the stored tables (`tasks`, `stages`, `jobs`, `sql`, `executors`, `config`, ...) with DuckDB |
 | `sentinel apps` | List ingested apps |
@@ -139,6 +194,8 @@ problem.
 - Per-operator SQL metrics (rows per plan node, files read) aren't parsed yet; the rules that
   need them are [planned](https://github.com/r4otxrhs3/spark-sentinel/blob/main/docs/rule-catalog.md).
 - Thresholds default to production-sized jobs; use `--profile laptop` for small runs.
+- `sentinel diff` compares one app with one app, from a single run each. A change inside a
+  Python UDF's code doesn't change the plan, so a slowdown it causes shows as unconfirmed.
 
 ## Contributing
 

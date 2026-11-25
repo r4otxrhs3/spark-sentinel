@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+**`sentinel diff BASELINE NEW`** compares two runs of the same app. It normalizes plans
+(expression IDs, operator numbers, paths), matches queries by plan and then by what they read
+and write, and compares time, task time, shuffle, spill, input and output. A change counts only
+past both a percentage and an absolute threshold (per profile; `--threshold` or `[diff]` in
+`sentinel.toml`). Slowdowns are explained (join strategy, Python UDFs, shuffles, spill, data
+volume, related settings) and are "confirmed" only when something deterministic changed. Also
+lists changed settings and new or fixed problems. Text, Markdown and JSON;
+`--fail-on slower` and `--fail-on <severity>` for CI.
+
+`sentinel --version` (and `-V`) prints the version.
+
+`lab/diff/`: a report job with one-line changes (broadcast join off, row-by-row Python UDF,
+extra query) for testing diff, with its runs as test fixtures.
+
 ## 0.1.0 (2026-11-24)
 
 First release.

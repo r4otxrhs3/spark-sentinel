@@ -12,6 +12,11 @@ sentinel.toml in the current folder is read automatically; --config picks anothe
 
     [thresholds.SKEW001]
     min_time_lost_ms = 5000
+
+    [diff]                      # sentinel diff: ignore changes smaller than these
+    min_change_pct = 25
+    min_time_ms = 30000
+    min_bytes = 268435456
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ from spark_sentinel.profiles import PROFILES
 
 CONFIG_FILE = "sentinel.toml"
 FORMATS = ("text", "md", "html", "json")
-_KNOWN_KEYS = {"profile", "fail_on", "format", "select", "ignore", "thresholds"}
+_KNOWN_KEYS = {"profile", "fail_on", "format", "select", "ignore", "thresholds", "diff"}
 _THRESHOLD_ARG = re.compile(r"^([A-Za-z]+\d{3})\.([a-z_]+)=(.+)$")
 
 
@@ -43,6 +48,7 @@ class Settings:
     select: list[str] | None = None
     ignore: list[str] = field(default_factory=list)
     thresholds: dict[str, dict[str, Any]] = field(default_factory=dict)
+    diff: dict[str, Any] = field(default_factory=dict)  # sentinel diff thresholds
     source: Path | None = None  # the config file used, if any
 
 
@@ -136,3 +142,7 @@ def _apply_file(settings: Settings, path: Path) -> None:
         if not isinstance(values, dict):
             raise ConfigError(f"{path}: [thresholds.{rule}] must be a table of name = value")
         settings.thresholds.setdefault(rule.upper(), {}).update(values)
+    diff = data.get("diff") or {}
+    if not isinstance(diff, dict):
+        raise ConfigError(f"{path}: [diff] must be a table of name = value")
+    settings.diff.update(diff)
